@@ -719,6 +719,10 @@ let poseFrameIntervalMs = 33.33;
 let poseFrameCommitPerfMs = 0;
 let score = 0;
 let fruits = [];
+/** Статичные доски-мишени (режим board): разбиваются ударом руки или ноги */
+let boards = [];
+/** Предыдущие экранные точки стоп/лодыжек по ключу `${personKey}:${lmIdx}` — для сегментов удара ногой */
+let prevFootPointByKey = new Map();
 let particles = [];
 let isPlaying = false;
 
@@ -1131,7 +1135,10 @@ const LEVELS = [
     { mode: 'number', maxConcurrent: 3, spawnIntervalMs: 1550, goal: 18 },
     { mode: 'word', maxConcurrent: 3, spawnIntervalMs: 1500, wordGoal: 10 },
     { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1350, wordGoal: 14 },
-    { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1200, wordGoal: 18 }
+    { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1200, wordGoal: 18 },
+    { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 8 },
+    { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 12 },
+    { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 16 }
 ];
 
 /** Кадров подряд без пересечения с предметом, чтобы снова считать «новый вход» (трекинг мерцает на границе круга) */
@@ -1140,7 +1147,7 @@ const CONTACT_EXIT_DEBOUNCE_FRAMES = 7;
 const MISS_PENALTY = 10;
 let currentLevelIndex = 0;
 let selectedGameMode = 'fruit';
-const MENU_GAME_MODES = ['fruit', 'number', 'word'];
+const MENU_GAME_MODES = ['fruit', 'number', 'word', 'board'];
 
 function levelIndicesForMode(mode) {
     const out = [];
@@ -1173,6 +1180,7 @@ const I18N = {
         tierLetters: 'Буквы',
         tierNumbers: 'Цифры',
         tierWords: 'Слова',
+        tierBoards: 'Доски',
         hudAtOnce: '',
         comboLabel: 'Серия',
         comboMax: 'Макс. серия',
@@ -1223,6 +1231,7 @@ const I18N = {
         tierLetters: 'Letters',
         tierNumbers: 'Numbers',
         tierWords: 'Words',
+        tierBoards: 'Boards',
         hudAtOnce: 'at once',
         comboLabel: 'Combo',
         comboMax: 'Best combo',
@@ -1302,6 +1311,8 @@ function levelTierTitle(levelIndex) {
             ? t('tierLetters')
             : cfg.mode === 'number'
             ? t('tierNumbers')
+            : cfg.mode === 'board'
+            ? t('tierBoards')
             : t('tierWords');
     return `${name} ${sub}`;
 }
@@ -1309,7 +1320,7 @@ function levelTierTitle(levelIndex) {
 function formatHudLevelLine(levelIndex, maxConcurrent) {
     const title = levelTierTitle(levelIndex);
     const cfg = LEVELS[levelIndex];
-    if (cfg?.mode === 'word') return title;
+    if (cfg?.mode === 'word' || cfg?.mode === 'board') return title;
     if (uiLang === 'en') {
         return `${title} · ${pluralSimultaneousEn(maxConcurrent)} ${t('hudAtOnce')}`.trim();
     }
@@ -1404,10 +1415,12 @@ function showMainMenu() {
     mainMenu.classList.remove('is-hidden');
     hudGame.classList.add('is-hidden');
     fruits.length = 0;
+    boards.length = 0;
     particles.length = 0;
     floatingTexts = [];
     screenFlash = 0;
     prevFingertipsByKey.clear();
+    prevFootPointByKey.clear();
     handKeyLastSeenMs.clear();
     tipVelocityByKey.clear();
     canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
@@ -1429,9 +1442,11 @@ function startLevel(levelIndex) {
     scoreDisplay.innerText = formatScore(score);
     levelDisplay.textContent = formatHudLevelLine(currentLevelIndex, cfg.maxConcurrent);
     fruits.length = 0;
+    boards.length = 0;
     particles.length = 0;
     floatingTexts = [];
     screenFlash = 0;
+    prevFootPointByKey.clear();
     comboStreak = 0;
     comboBest = 0;
     levelGoodHits = 0;
@@ -2186,6 +2201,164 @@ class Fruit {
     }
 }
 
+/**
+ * Режим «Доски»: статичная деревянная доска-мишень в случайном месте экрана.
+ * Разбивается только ударом (быстрым движением) руки ИЛИ ноги — медленное касание не считается,
+ * чтобы доска не ломалась, просто появившись рядом с игроком.
+ */
+const BOARD_MIN_STRIKE_SPEED_PX = 7;      // минимальный сдвиг за кадр 60fps (~420 px/с) для засчёта удара
+const BOARD_SPAWN_ARM_FRAMES = 20;        // ~0.33 с pop-in анимации, в это время доска не бьётся
+const BOARD_LIFETIME_FRAMES = 60 * 9;     // ~9 с: не разбили — мягко исчезает и появляется в другом месте
+/** Лодыжки и носки обеих ног (BlazePose): сегменты удара ногой строятся по этим точкам */
+const FOOT_STRIKE_INDICES = [27, 28, 31, 32];
+const FOOT_GLOW_INDICES = [31, 32];
+
+const BOARD_BREAK_SFX = [sliceSoundUrlByEmoji['🍗'], sliceSoundUrlByEmoji['🥩']].filter(Boolean);
+let boardBreakSfxRot = 0;
+
+function playBoardBreakSound() {
+    if (!soundEffectsEnabled || !BOARD_BREAK_SFX.length) return;
+    playOneShotSfx(BOARD_BREAK_SFX[boardBreakSfxRot++ % BOARD_BREAK_SFX.length], 0.95);
+}
+
+class Board {
+    constructor(x, y) {
+        const { minSide } = gameLayout;
+        this.x = x;
+        this.y = y;
+        this.w = Math.min(300, Math.max(130, minSide * 0.30));
+        this.h = this.w * 0.30;
+        /** Круг для lineCircleCollide — чуть шире доски, детям проще попасть */
+        this.radius = this.w * 0.46;
+        this.color = '#ffb066';
+        this.tilt = (Math.random() * 2 - 1) * 0.10;
+        this.age = 0;
+        this.isBroken = false;
+        this.breakT = 0;
+        this.fade = 0;
+    }
+
+    isArmed() {
+        return this.age >= BOARD_SPAWN_ARM_FRAMES && this.fade <= 0;
+    }
+
+    isGone() {
+        return (this.isBroken && this.breakT >= 1.5) || this.fade >= 1;
+    }
+
+    update(dt = 1) {
+        this.age += dt;
+        if (this.isBroken) {
+            this.breakT += 0.035 * dt;
+        } else if (this.age > BOARD_LIFETIME_FRAMES) {
+            this.fade = Math.min(1, this.fade + 0.05 * dt);
+        }
+    }
+
+    drawPlank(ctx, half) {
+        /** half: 0 — целая; -1 — левая половина; 1 — правая */
+        const w = half === 0 ? this.w : this.w / 2;
+        const x0 = half === 1 ? 0 : -this.w / 2;
+        const g = ctx.createLinearGradient(0, -this.h / 2, 0, this.h / 2);
+        g.addColorStop(0, '#c68b4e');
+        g.addColorStop(0.5, '#a96e38');
+        g.addColorStop(1, '#7c4f26');
+        ctx.fillStyle = g;
+        ctx.strokeStyle = 'rgba(0, 243, 255, 0.85)';
+        ctx.lineWidth = 3;
+        ctx.shadowColor = '#00f3ff';
+        ctx.shadowBlur = 14;
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(x0, -this.h / 2, w, this.h, 8);
+        else ctx.rect(x0, -this.h / 2, w, this.h);
+        ctx.fill();
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        /** Волокна дерева */
+        ctx.strokeStyle = 'rgba(70, 42, 18, 0.55)';
+        ctx.lineWidth = 1.6;
+        for (let i = -1; i <= 1; i++) {
+            ctx.beginPath();
+            ctx.moveTo(x0 + 8, i * this.h * 0.22);
+            ctx.lineTo(x0 + w - 8, i * this.h * 0.22 + i * 2);
+            ctx.stroke();
+        }
+    }
+
+    draw(ctx) {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.tilt);
+        const pop = Math.min(1, this.age / BOARD_SPAWN_ARM_FRAMES);
+        const scale = 0.6 + 0.4 * (1 - (1 - pop) * (1 - pop)); // ease-out
+        ctx.scale(scale, scale);
+        ctx.globalAlpha = Math.max(0, 1 - this.fade) * (0.35 + 0.65 * pop);
+
+        if (!this.isBroken) {
+            this.drawPlank(ctx, 0);
+            /** Мишень по центру — приглашение ударить */
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(0, 0, this.h * 0.28, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(0, 0, this.h * 0.10, 0, Math.PI * 2);
+            ctx.stroke();
+        } else {
+            const bt = Math.min(1.5, this.breakT);
+            ctx.globalAlpha *= Math.max(0, 1 - bt / 1.5);
+            const drop = bt * bt * 46;
+            /** Левая половина падает влево-вниз, правая — вправо-вниз (классическое «карате») */
+            ctx.save();
+            ctx.translate(-this.w * 0.08 - bt * 14, drop);
+            ctx.rotate(-0.55 * bt);
+            this.drawPlank(ctx, -1);
+            ctx.restore();
+            ctx.save();
+            ctx.translate(this.w * 0.08 + bt * 14, drop);
+            ctx.rotate(0.55 * bt);
+            this.drawPlank(ctx, 1);
+            ctx.restore();
+        }
+        ctx.restore();
+    }
+}
+
+/** Случайное место для новой доски: с отступами от краёв и без наложения на существующие */
+function spawnBoardAtFreeSpot() {
+    const { w, h } = gameLayout;
+    for (let attempt = 0; attempt < 12; attempt++) {
+        const x = w * (0.14 + Math.random() * 0.72);
+        const y = h * (0.24 + Math.random() * 0.60);
+        let clear = true;
+        for (const b of boards) {
+            if (Math.hypot(b.x - x, b.y - y) < b.radius * 2.1) {
+                clear = false;
+                break;
+            }
+        }
+        if (clear) return new Board(x, y);
+    }
+    return null;
+}
+
+/** Неоновая подсветка ступни — показывает ребёнку, что ногой тоже можно бить */
+function drawFootGlow(ctx, pt) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 13, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(0, 243, 255, 0.35)';
+    ctx.shadowColor = '#00f3ff';
+    ctx.shadowBlur = 18;
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.fill();
+    ctx.restore();
+}
+
 /** Radial “splash” at slice: rays + ring, decays quickly */
 class SliceBurst {
     constructor(x, y, color) {
@@ -2858,6 +3031,9 @@ function gameLoop(nowTime) {
 
     // Prepare line segments for collision detection
     const handSegments = [];
+    /** Режим «Доски»: сегменты именно УДАРОВ (быстрых движений) рук и ног */
+    const boardStrikeSegments = levelCfg.mode === 'board' ? [] : null;
+    const boardStrikeMinPx = BOARD_MIN_STRIKE_SPEED_PX * Math.max(0.3, Math.min(dt, 3));
 
     // Draw Pose (display-landmarks: сглажены на кадре камеры + интерполяция на rAF)
     if (displayPersons.length > 0) {
@@ -3068,6 +3244,9 @@ function gameLoop(nowTime) {
                 const jx = tip.x - prev[tipIdx].x;
                 const jy = tip.y - prev[tipIdx].y;
                 const jump = Math.hypot(jx, jy);
+                if (boardStrikeSegments && jump >= boardStrikeMinPx && jump < MAX_JUMP_FOR_VELOCITY_PX) {
+                    appendSweepCollisionSegments(boardStrikeSegments, prev[tipIdx], tip);
+                }
                 if (jump < MAX_JUMP_FOR_VELOCITY_PX) {
                     if (!velMap[tipIdx]) velMap[tipIdx] = { vx: 0, vy: 0 };
                     const sm = TIP_VELOCITY_SMOOTH;
@@ -3109,6 +3288,31 @@ function gameLoop(nowTime) {
         }
     }
 
+    /** Режим «Доски»: удары ногами — сегменты по лодыжкам и носкам + подсветка ступней */
+    if (boardStrikeSegments) {
+        for (const { key, lm } of displayPersons) {
+            for (const idx of FOOT_STRIKE_INDICES) {
+                const p = lm[idx];
+                if (!p || (p.visibility !== undefined && p.visibility < 0.5)) continue;
+                const pt = getScreenPoint(p);
+                const footKey = `${key}:${idx}`;
+                const prevPt = prevFootPointByKey.get(footKey);
+                if (prevPt) {
+                    const jump = Math.hypot(pt.x - prevPt.x, pt.y - prevPt.y);
+                    if (jump >= boardStrikeMinPx && jump < MAX_JUMP_FOR_VELOCITY_PX) {
+                        appendSweepCollisionSegments(boardStrikeSegments, prevPt, pt);
+                    }
+                }
+                prevFootPointByKey.set(footKey, pt);
+            }
+            for (const idx of FOOT_GLOW_INDICES) {
+                const p = lm[idx];
+                if (!p || (p.visibility !== undefined && p.visibility < 0.5)) continue;
+                drawFootGlow(canvasCtx, getScreenPoint(p));
+            }
+        }
+    }
+
     // Draw Hands (same order as keyedHands)
     if (keyedHands.length > 0) {
         for (const { landmarks } of keyedHands) {
@@ -3128,9 +3332,43 @@ function gameLoop(nowTime) {
     const unslicedCount = fruits.filter((f) => !f.isSliced).length;
     /** В режиме слов — строго одна нужная буква на экране, чтобы ребёнок видел ровно ту, что нужна */
     const effectiveMaxConcurrent = levelCfg.mode === 'word' ? 1 : levelCfg.maxConcurrent;
-    if (!levelComplete && !wordRevealActive && now - lastSpawnTime >= levelCfg.spawnIntervalMs && unslicedCount < effectiveMaxConcurrent) {
+    if (levelCfg.mode !== 'board' && !levelComplete && !wordRevealActive && now - lastSpawnTime >= levelCfg.spawnIntervalMs && unslicedCount < effectiveMaxConcurrent) {
         fruits.push(new Fruit());
         lastSpawnTime = now;
+    }
+
+    /** Режим «Доски»: обновление, удары рук/ног, спавн новых досок */
+    if (levelCfg.mode === 'board') {
+        for (let i = boards.length - 1; i >= 0; i--) {
+            const board = boards[i];
+            board.update(dt);
+            board.draw(canvasCtx);
+            if (!board.isBroken && board.isArmed() && !levelComplete) {
+                let hit = false;
+                for (const seg of boardStrikeSegments) {
+                    if (lineCircleCollide(seg.a, seg.b, board)) {
+                        hit = true;
+                        break;
+                    }
+                }
+                if (hit) {
+                    board.isBroken = true;
+                    playBoardBreakSound();
+                    registerGoodHit(board, 15);
+                    juiceBurst(board.x, board.y, board.color, 30, 20);
+                    checkLevelGoal();
+                }
+            }
+            if (board.isGone()) boards.splice(i, 1);
+        }
+        const activeBoards = boards.filter((b) => !b.isBroken && b.fade <= 0).length;
+        if (!levelComplete && now - lastSpawnTime >= levelCfg.spawnIntervalMs && activeBoards < levelCfg.maxConcurrent) {
+            const b = spawnBoardAtFreeSpot();
+            if (b) {
+                boards.push(b);
+                lastSpawnTime = now;
+            }
+        }
     }
 
     for (let i = fruits.length - 1; i >= 0; i--) {
