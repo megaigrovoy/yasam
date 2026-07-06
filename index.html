@@ -135,7 +135,17 @@
             <h2 id="win-title" class="win-title"></h2>
             <p id="win-score" class="win-score"></p>
             <div class="win-actions">
-              <button type="button" id="btn-win-next" class="btn-menu btn-win-next"></button>
+              <div class="win-next-group">
+                <div id="win-auto-timer" class="win-auto-timer is-hidden" aria-live="polite">
+                  <svg class="win-auto-ring" viewBox="0 0 64 64" aria-hidden="true">
+                    <circle class="win-auto-ring-track" cx="32" cy="32" r="28" />
+                    <circle id="win-auto-ring-progress" class="win-auto-ring-progress" cx="32" cy="32" r="28" />
+                  </svg>
+                  <span id="win-auto-countdown" class="win-auto-countdown">4</span>
+                </div>
+                <p id="win-auto-hint" class="win-auto-hint is-hidden"></p>
+                <button type="button" id="btn-win-next" class="btn-menu btn-win-next"></button>
+              </div>
               <button type="button" id="btn-win-menu" class="btn-menu btn-win-menu"></button>
             </div>
           </div>

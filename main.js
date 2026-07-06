@@ -699,6 +699,10 @@ const winTitleEl = document.getElementById('win-title');
 const winScoreEl = document.getElementById('win-score');
 const btnWinNext = document.getElementById('btn-win-next');
 const btnWinMenu = document.getElementById('btn-win-menu');
+const winAutoTimerEl = document.getElementById('win-auto-timer');
+const winAutoRingEl = document.getElementById('win-auto-ring-progress');
+const winAutoCountdownEl = document.getElementById('win-auto-countdown');
+const winAutoHintEl = document.getElementById('win-auto-hint');
 
 let poseLandmarker;
 let visionTasksResolver = null;
@@ -1098,14 +1102,57 @@ function completeLevel() {
     showWinOverlay(computeStars());
 }
 
-const WIN_AUTO_NEXT_MS = 3000;
+const WIN_AUTO_NEXT_MS = 4000;
+/** Длина окружности SVG-кольца (r=28) для визуального таймера автоперехода */
+const WIN_AUTO_RING_C = 2 * Math.PI * 28;
 let autoNextLevelTimer = 0;
+let autoNextCountdownRaf = 0;
+let autoNextDeadline = 0;
 
 function clearAutoNextLevelTimer() {
     if (autoNextLevelTimer) {
         clearTimeout(autoNextLevelTimer);
         autoNextLevelTimer = 0;
     }
+    if (autoNextCountdownRaf) {
+        cancelAnimationFrame(autoNextCountdownRaf);
+        autoNextCountdownRaf = 0;
+    }
+    autoNextDeadline = 0;
+    winAutoTimerEl?.classList.add('is-hidden');
+    winAutoHintEl?.classList.add('is-hidden');
+    if (winAutoRingEl) winAutoRingEl.style.strokeDashoffset = '0';
+}
+
+function updateAutoNextVisual() {
+    if (!autoNextDeadline) return;
+    const remain = Math.max(0, autoNextDeadline - performance.now());
+    const ratio = remain / WIN_AUTO_NEXT_MS;
+    if (winAutoRingEl) {
+        winAutoRingEl.style.strokeDashoffset = String(WIN_AUTO_RING_C * (1 - ratio));
+    }
+    if (winAutoCountdownEl) {
+        winAutoCountdownEl.textContent = String(Math.max(1, Math.ceil(remain / 1000)));
+    }
+    if (remain > 0) {
+        autoNextCountdownRaf = requestAnimationFrame(updateAutoNextVisual);
+    } else if (winAutoCountdownEl) {
+        winAutoCountdownEl.textContent = '0';
+    }
+}
+
+function scheduleAutoNextLevel() {
+    clearAutoNextLevelTimer();
+    autoNextDeadline = performance.now() + WIN_AUTO_NEXT_MS;
+    if (winAutoHintEl) winAutoHintEl.textContent = t('winAutoHint');
+    winAutoTimerEl?.classList.remove('is-hidden');
+    winAutoHintEl?.classList.remove('is-hidden');
+    if (winAutoCountdownEl) winAutoCountdownEl.textContent = String(Math.ceil(WIN_AUTO_NEXT_MS / 1000));
+    updateAutoNextVisual();
+    autoNextLevelTimer = setTimeout(() => {
+        autoNextLevelTimer = 0;
+        if (isPlaying && levelComplete) goToNextLevel();
+    }, WIN_AUTO_NEXT_MS);
 }
 
 function goToNextLevel() {
@@ -1113,14 +1160,6 @@ function goToNextLevel() {
     tryUnlockAudioOnUserGesture();
     hideWinOverlay();
     startLevel(nextLevelIndexInsideMode(currentLevelIndex, selectedGameMode));
-}
-
-function scheduleAutoNextLevel() {
-    clearAutoNextLevelTimer();
-    autoNextLevelTimer = setTimeout(() => {
-        autoNextLevelTimer = 0;
-        if (isPlaying && levelComplete) goToNextLevel();
-    }, WIN_AUTO_NEXT_MS);
 }
 
 function showWinOverlay(stars) {
@@ -1163,9 +1202,9 @@ const LEVELS = [
     { mode: 'word', maxConcurrent: 3, spawnIntervalMs: 1500, wordGoal: 12 },
     { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1350, wordGoal: 18 },
     { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1200, wordGoal: 22 },
-    { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 10 },
-    { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 15 },
-    { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 20 }
+    { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 20 },
+    { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 30 },
+    { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 40 }
 ];
 
 /** Кадров подряд без пересечения с предметом, чтобы снова считать «новый вход» (трекинг мерцает на границе круга) */
@@ -1215,6 +1254,7 @@ const I18N = {
         winTitle: 'Уровень пройден!',
         winScoreLabel: 'Счёт',
         winNextLevel: 'Дальше',
+        winAutoHint: 'Следующий уровень через',
         winReplay: 'Ещё раз',
         winToMenu: 'Меню',
         praiseGreat: 'Молодец!',
@@ -1266,6 +1306,7 @@ const I18N = {
         winTitle: 'Level complete!',
         winScoreLabel: 'Score',
         winNextLevel: 'Next',
+        winAutoHint: 'Next level in',
         winReplay: 'Replay',
         winToMenu: 'Menu',
         praiseGreat: 'Great!',
