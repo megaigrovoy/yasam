@@ -1098,6 +1098,31 @@ function completeLevel() {
     showWinOverlay(computeStars());
 }
 
+const WIN_AUTO_NEXT_MS = 3000;
+let autoNextLevelTimer = 0;
+
+function clearAutoNextLevelTimer() {
+    if (autoNextLevelTimer) {
+        clearTimeout(autoNextLevelTimer);
+        autoNextLevelTimer = 0;
+    }
+}
+
+function goToNextLevel() {
+    clearAutoNextLevelTimer();
+    tryUnlockAudioOnUserGesture();
+    hideWinOverlay();
+    startLevel(nextLevelIndexInsideMode(currentLevelIndex, selectedGameMode));
+}
+
+function scheduleAutoNextLevel() {
+    clearAutoNextLevelTimer();
+    autoNextLevelTimer = setTimeout(() => {
+        autoNextLevelTimer = 0;
+        if (isPlaying && levelComplete) goToNextLevel();
+    }, WIN_AUTO_NEXT_MS);
+}
+
 function showWinOverlay(stars) {
     if (winStarsEl) {
         winStarsEl.innerHTML = '';
@@ -1116,9 +1141,11 @@ function showWinOverlay(stars) {
     }
     if (btnWinMenu) btnWinMenu.textContent = t('winToMenu');
     winOverlay?.classList.remove('is-hidden');
+    scheduleAutoNextLevel();
 }
 
 function hideWinOverlay() {
+    clearAutoNextLevelTimer();
     winOverlay?.classList.add('is-hidden');
 }
 
@@ -1127,18 +1154,18 @@ function hideWinOverlay() {
  * goal — сколько объектов нужно срезать, чтобы пройти уровень; word: wordGoal — сколько слов собрать.
  */
 const LEVELS = [
-    { mode: 'fruit', maxConcurrent: 1, spawnIntervalMs: 2200, goal: 10 },
-    { mode: 'fruit', maxConcurrent: 2, spawnIntervalMs: 1900, goal: 14 },
-    { mode: 'fruit', maxConcurrent: 3, spawnIntervalMs: 1550, goal: 18 },
-    { mode: 'number', maxConcurrent: 1, spawnIntervalMs: 2200, goal: 10 },
-    { mode: 'number', maxConcurrent: 2, spawnIntervalMs: 1900, goal: 14 },
-    { mode: 'number', maxConcurrent: 3, spawnIntervalMs: 1550, goal: 18 },
-    { mode: 'word', maxConcurrent: 3, spawnIntervalMs: 1500, wordGoal: 10 },
-    { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1350, wordGoal: 14 },
-    { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1200, wordGoal: 18 },
-    { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 8 },
-    { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 12 },
-    { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 16 }
+    { mode: 'fruit', maxConcurrent: 1, spawnIntervalMs: 2200, goal: 12 },
+    { mode: 'fruit', maxConcurrent: 2, spawnIntervalMs: 1900, goal: 18 },
+    { mode: 'fruit', maxConcurrent: 3, spawnIntervalMs: 1550, goal: 22 },
+    { mode: 'number', maxConcurrent: 1, spawnIntervalMs: 2200, goal: 12 },
+    { mode: 'number', maxConcurrent: 2, spawnIntervalMs: 1900, goal: 18 },
+    { mode: 'number', maxConcurrent: 3, spawnIntervalMs: 1550, goal: 22 },
+    { mode: 'word', maxConcurrent: 3, spawnIntervalMs: 1500, wordGoal: 12 },
+    { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1350, wordGoal: 18 },
+    { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1200, wordGoal: 22 },
+    { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 10 },
+    { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 15 },
+    { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 20 }
 ];
 
 /** Кадров подряд без пересечения с предметом, чтобы снова считать «новый вход» (трекинг мерцает на границе круга) */
@@ -1482,11 +1509,7 @@ function startLevel(levelIndex) {
 
 btnBackMenu.addEventListener('click', () => showMainMenu());
 
-btnWinNext?.addEventListener('click', () => {
-    tryUnlockAudioOnUserGesture();
-    hideWinOverlay();
-    startLevel(nextLevelIndexInsideMode(currentLevelIndex, selectedGameMode));
-});
+btnWinNext?.addEventListener('click', () => goToNextLevel());
 
 btnWinMenu?.addEventListener('click', () => {
     hideWinOverlay();
