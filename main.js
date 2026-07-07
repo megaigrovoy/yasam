@@ -223,6 +223,18 @@ const enPraiseUrls = Object.values(
     import.meta.glob('./src/assets/sounds/praise/en/*.MP3', { eager: true, query: '?url', import: 'default' })
 );
 
+/** Подсказка при появлении доски — sounds/board/ru|en: hand.MP3 («Бей!»/«Рукой!»), foot.MP3 («Ногой!») */
+const ruBoardHintUrlByStem = Object.fromEntries(
+    Object.entries(
+        import.meta.glob('./src/assets/sounds/board/ru/*.MP3', { eager: true, query: '?url', import: 'default' })
+    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.MP3$/i, '').toLowerCase(), href])
+);
+const enBoardHintUrlByStem = Object.fromEntries(
+    Object.entries(
+        import.meta.glob('./src/assets/sounds/board/en/*.MP3', { eager: true, query: '?url', import: 'default' })
+    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.MP3$/i, '').toLowerCase(), href])
+);
+
 /** Фанфары/«ты победил» на экране победы — sounds/win/ru|en (любые имена, случайный) */
 const ruWinUrls = Object.values(
     import.meta.glob('./src/assets/sounds/win/ru/*.MP3', { eager: true, query: '?url', import: 'default' })
@@ -286,6 +298,14 @@ function pickRandomUrl(arr) {
 function playPraiseSound() {
     if (!soundEffectsEnabled) return;
     const u = pickRandomUrl(uiLang === 'en' ? enPraiseUrls : ruPraiseUrls);
+    if (u) playOneShotSfx(u, 1.0);
+}
+
+/** «Бей!» / «Ногой!» при появлении доски в соответствующей зоне */
+function playBoardHintSound(strikeKind) {
+    if (!soundEffectsEnabled) return;
+    const map = uiLang === 'en' ? enBoardHintUrlByStem : ruBoardHintUrlByStem;
+    const u = map[strikeKind] || map[strikeKind === 'hand' ? 'hit' : 'kick'];
     if (u) playOneShotSfx(u, 1.0);
 }
 
@@ -492,6 +512,8 @@ function currentLevelSfxUrls(cfg) {
         const letters = uiLang === 'en' ? enLetterSpawnUrlByLower : ruLetterSpawnUrlByLower;
         urls.push(...Object.values(letters));
         urls.push(...Object.values(uiLang === 'en' ? enWordUrlByText : ruWordUrlByText));
+    } else if (cfg?.mode === 'board') {
+        urls.push(...Object.values(uiLang === 'en' ? enBoardHintUrlByStem : ruBoardHintUrlByStem));
     }
     return urls.filter(Boolean);
 }
@@ -725,6 +747,8 @@ let score = 0;
 let fruits = [];
 /** Статичные доски-мишени (режим board): разбиваются ударом руки или ноги */
 let boards = [];
+/** Чередование зон: высоко (рука) ↔ низко (нога) — предсказуемо для детей */
+let nextBoardStrikeKind = 'hand';
 /** Предыдущие экранные точки стоп/лодыжек по ключу `${personKey}:${lmIdx}` — для сегментов удара ногой */
 let prevFootPointByKey = new Map();
 let particles = [];
@@ -1533,6 +1557,7 @@ function startLevel(levelIndex) {
     } else {
         wordProgressEl?.classList.add('is-hidden');
     }
+    if (cfg.mode === 'board') nextBoardStrikeKind = 'hand';
     lastSpawnTime = Date.now();
     lastFrameTime = performance.now();
     resetPoseDisplayState();
@@ -2273,6 +2298,11 @@ class Fruit {
 const BOARD_MIN_STRIKE_SPEED_PX = 7;      // минимальный сдвиг за кадр 60fps (~420 px/с) для засчёта удара
 const BOARD_SPAWN_ARM_FRAMES = 20;        // ~0.33 с pop-in анимации, в это время доска не бьётся
 const BOARD_LIFETIME_FRAMES = 60 * 9;     // ~9 с: не разбили — мягко исчезает и появляется в другом месте
+/** Вертикальные зоны появления досок (доля высоты экрана): hand — верх, foot — низ */
+const BOARD_ZONE_Y = {
+    hand: { yMin: 0.20, yMax: 0.40 },
+    foot: { yMin: 0.58, yMax: 0.78 }
+};
 /** Лодыжки и носки обеих ног (BlazePose): сегменты удара ногой строятся по этим точкам */
 const FOOT_STRIKE_INDICES = [27, 28, 31, 32];
 const FOOT_GLOW_INDICES = [31, 32];
@@ -2286,20 +2316,24 @@ function playBoardBreakSound() {
 }
 
 class Board {
-    constructor(x, y) {
+    constructor(x, y, strikeKind) {
         const { minSide } = gameLayout;
         this.x = x;
         this.y = y;
+        /** 'hand' — бить рукой (верхняя зона); 'foot' — ногой (нижняя) */
+        this.strikeKind = strikeKind === 'foot' ? 'foot' : 'hand';
         this.w = Math.min(300, Math.max(130, minSide * 0.30));
         this.h = this.w * 0.30;
         /** Круг для lineCircleCollide — чуть шире доски, детям проще попасть */
         this.radius = this.w * 0.46;
-        this.color = '#ffb066';
+        this.color = this.strikeKind === 'hand' ? '#66e8ff' : '#ff8fd4';
         this.tilt = (Math.random() * 2 - 1) * 0.10;
         this.age = 0;
         this.isBroken = false;
         this.breakT = 0;
         this.fade = 0;
+        /** Мягкая встряска, если ударили «не той» частью тела */
+        this.nudgeFlash = 0;
     }
 
     isArmed() {
@@ -2312,11 +2346,20 @@ class Board {
 
     update(dt = 1) {
         this.age += dt;
+        if (this.nudgeFlash > 0) this.nudgeFlash = Math.max(0, this.nudgeFlash - 0.06 * dt);
         if (this.isBroken) {
             this.breakT += 0.035 * dt;
         } else if (this.age > BOARD_LIFETIME_FRAMES) {
             this.fade = Math.min(1, this.fade + 0.05 * dt);
         }
+    }
+
+    neonStroke() {
+        return this.strikeKind === 'hand' ? 'rgba(0, 243, 255, 0.9)' : 'rgba(255, 110, 200, 0.92)';
+    }
+
+    strikeIcon() {
+        return this.strikeKind === 'hand' ? '🖐' : '🦶';
     }
 
     drawPlank(ctx, half) {
@@ -2328,9 +2371,9 @@ class Board {
         g.addColorStop(0.5, '#a96e38');
         g.addColorStop(1, '#7c4f26');
         ctx.fillStyle = g;
-        ctx.strokeStyle = 'rgba(0, 243, 255, 0.85)';
+        ctx.strokeStyle = this.neonStroke();
         ctx.lineWidth = 3;
-        ctx.shadowColor = '#00f3ff';
+        ctx.shadowColor = this.strikeKind === 'hand' ? '#00f3ff' : '#ff6ec7';
         ctx.shadowBlur = 14;
         ctx.beginPath();
         if (ctx.roundRect) ctx.roundRect(x0, -this.h / 2, w, this.h, 8);
@@ -2351,7 +2394,8 @@ class Board {
 
     draw(ctx) {
         ctx.save();
-        ctx.translate(this.x, this.y);
+        const shake = this.nudgeFlash > 0 ? Math.sin(this.age * 0.9) * 8 * this.nudgeFlash : 0;
+        ctx.translate(this.x + shake, this.y);
         ctx.rotate(this.tilt);
         const pop = Math.min(1, this.age / BOARD_SPAWN_ARM_FRAMES);
         const scale = 0.6 + 0.4 * (1 - (1 - pop) * (1 - pop)); // ease-out
@@ -2359,6 +2403,19 @@ class Board {
         ctx.globalAlpha = Math.max(0, 1 - this.fade) * (0.35 + 0.65 * pop);
 
         if (!this.isBroken) {
+            /** Крупная подсказка: чем бить */
+            const iconPulse = 1 + 0.08 * Math.sin(this.age * 0.14);
+            ctx.save();
+            ctx.scale(iconPulse, iconPulse);
+            ctx.font = `bold ${Math.round(this.w * 0.34)}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.shadowColor = this.strikeKind === 'hand' ? '#00f3ff' : '#ff6ec7';
+            ctx.shadowBlur = 16;
+            ctx.fillText(this.strikeIcon(), 0, -this.h * 0.42);
+            ctx.shadowBlur = 0;
+            ctx.restore();
+
             this.drawPlank(ctx, 0);
             /** Мишень по центру — приглашение ударить */
             ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
@@ -2389,12 +2446,20 @@ class Board {
     }
 }
 
-/** Случайное место для новой доски: с отступами от краёв и без наложения на существующие */
-function spawnBoardAtFreeSpot() {
+/** Чередует руку и ногу — ребёнок знает, что будет дальше */
+function pickBoardStrikeKind() {
+    const kind = nextBoardStrikeKind;
+    nextBoardStrikeKind = kind === 'hand' ? 'foot' : 'hand';
+    return kind;
+}
+
+/** Случайное место для новой доски в нужной зоне (верх — рука, низ — нога) */
+function spawnBoardAtFreeSpot(strikeKind) {
     const { w, h } = gameLayout;
+    const zone = BOARD_ZONE_Y[strikeKind] || BOARD_ZONE_Y.hand;
     for (let attempt = 0; attempt < 12; attempt++) {
         const x = w * (0.14 + Math.random() * 0.72);
-        const y = h * (0.24 + Math.random() * 0.60);
+        const y = h * (zone.yMin + Math.random() * (zone.yMax - zone.yMin));
         let clear = true;
         for (const b of boards) {
             if (Math.hypot(b.x - x, b.y - y) < b.radius * 2.1) {
@@ -2402,9 +2467,39 @@ function spawnBoardAtFreeSpot() {
                 break;
             }
         }
-        if (clear) return new Board(x, y);
+        if (clear) return new Board(x, y, strikeKind);
     }
     return null;
+}
+
+/** Подсветка зон «рука / нога» на фоне — ориентир для ребёнка */
+function drawBoardZoneGuides(ctx, layout) {
+    const { w, h } = layout;
+    ctx.save();
+    ctx.globalAlpha = 0.11;
+    ctx.fillStyle = '#00f3ff';
+    ctx.fillRect(w * 0.06, h * BOARD_ZONE_Y.hand.yMin, w * 0.88, h * (BOARD_ZONE_Y.hand.yMax - BOARD_ZONE_Y.hand.yMin));
+    ctx.fillStyle = '#ff6ec7';
+    ctx.fillRect(w * 0.06, h * BOARD_ZONE_Y.foot.yMin, w * 0.88, h * (BOARD_ZONE_Y.foot.yMax - BOARD_ZONE_Y.foot.yMin));
+    ctx.globalAlpha = 0.72;
+    const fontPx = Math.min(36, w * 0.055);
+    ctx.font = `bold ${fontPx}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#00f3ff';
+    ctx.shadowBlur = 12;
+    ctx.fillText('🖐', w * 0.08, h * ((BOARD_ZONE_Y.hand.yMin + BOARD_ZONE_Y.hand.yMax) / 2));
+    ctx.shadowColor = '#ff6ec7';
+    ctx.fillText('🦶', w * 0.08, h * ((BOARD_ZONE_Y.foot.yMin + BOARD_ZONE_Y.foot.yMax) / 2));
+    ctx.restore();
+}
+
+function boardSegmentsHitBoard(segments, board) {
+    if (!segments?.length) return false;
+    for (const seg of segments) {
+        if (lineCircleCollide(seg.a, seg.b, board)) return true;
+    }
+    return false;
 }
 
 /** Неоновая подсветка ступни — показывает ребёнку, что ногой тоже можно бить */
@@ -3086,6 +3181,8 @@ function gameLoop(nowTime) {
     canvasCtx.fillStyle = 'rgba(0,0,0,0.6)';
     canvasCtx.fillRect(0, 0, canvasElement.width, canvasElement.height);
 
+    if (levelCfg.mode === 'board') drawBoardZoneGuides(canvasCtx, gameLayout);
+
     function getScreenPoint(landmark) {
         return {
             x: (landmark.x * video.videoWidth * ratio) + centerShift_x,
@@ -3095,8 +3192,9 @@ function gameLoop(nowTime) {
 
     // Prepare line segments for collision detection
     const handSegments = [];
-    /** Режим «Доски»: сегменты именно УДАРОВ (быстрых движений) рук и ног */
-    const boardStrikeSegments = levelCfg.mode === 'board' ? [] : null;
+    /** Режим «Доски»: сегменты ударов рук и ног отдельно — доска ломается только «своей» частью тела */
+    const boardHandStrikeSegments = levelCfg.mode === 'board' ? [] : null;
+    const boardFootStrikeSegments = levelCfg.mode === 'board' ? [] : null;
     const boardStrikeMinPx = BOARD_MIN_STRIKE_SPEED_PX * Math.max(0.3, Math.min(dt, 3));
 
     // Draw Pose (display-landmarks: сглажены на кадре камеры + интерполяция на rAF)
@@ -3308,8 +3406,8 @@ function gameLoop(nowTime) {
                 const jx = tip.x - prev[tipIdx].x;
                 const jy = tip.y - prev[tipIdx].y;
                 const jump = Math.hypot(jx, jy);
-                if (boardStrikeSegments && jump >= boardStrikeMinPx && jump < MAX_JUMP_FOR_VELOCITY_PX) {
-                    appendSweepCollisionSegments(boardStrikeSegments, prev[tipIdx], tip);
+                if (boardHandStrikeSegments && jump >= boardStrikeMinPx && jump < MAX_JUMP_FOR_VELOCITY_PX) {
+                    appendSweepCollisionSegments(boardHandStrikeSegments, prev[tipIdx], tip);
                 }
                 if (jump < MAX_JUMP_FOR_VELOCITY_PX) {
                     if (!velMap[tipIdx]) velMap[tipIdx] = { vx: 0, vy: 0 };
@@ -3353,7 +3451,7 @@ function gameLoop(nowTime) {
     }
 
     /** Режим «Доски»: удары ногами — сегменты по лодыжкам и носкам + подсветка ступней */
-    if (boardStrikeSegments) {
+    if (boardFootStrikeSegments) {
         for (const { key, lm } of displayPersons) {
             for (const idx of FOOT_STRIKE_INDICES) {
                 const p = lm[idx];
@@ -3364,7 +3462,7 @@ function gameLoop(nowTime) {
                 if (prevPt) {
                     const jump = Math.hypot(pt.x - prevPt.x, pt.y - prevPt.y);
                     if (jump >= boardStrikeMinPx && jump < MAX_JUMP_FOR_VELOCITY_PX) {
-                        appendSweepCollisionSegments(boardStrikeSegments, prevPt, pt);
+                        appendSweepCollisionSegments(boardFootStrikeSegments, prevPt, pt);
                     }
                 }
                 prevFootPointByKey.set(footKey, pt);
@@ -3408,12 +3506,11 @@ function gameLoop(nowTime) {
             board.update(dt);
             board.draw(canvasCtx);
             if (!board.isBroken && board.isArmed() && !levelComplete) {
-                let hit = false;
-                for (const seg of boardStrikeSegments) {
-                    if (lineCircleCollide(seg.a, seg.b, board)) {
-                        hit = true;
-                        break;
-                    }
+                const rightSegs = board.strikeKind === 'hand' ? boardHandStrikeSegments : boardFootStrikeSegments;
+                const wrongSegs = board.strikeKind === 'hand' ? boardFootStrikeSegments : boardHandStrikeSegments;
+                const hit = boardSegmentsHitBoard(rightSegs, board);
+                if (!hit && boardSegmentsHitBoard(wrongSegs, board)) {
+                    board.nudgeFlash = 1;
                 }
                 if (hit) {
                     board.isBroken = true;
@@ -3427,9 +3524,11 @@ function gameLoop(nowTime) {
         }
         const activeBoards = boards.filter((b) => !b.isBroken && b.fade <= 0).length;
         if (!levelComplete && now - lastSpawnTime >= levelCfg.spawnIntervalMs && activeBoards < levelCfg.maxConcurrent) {
-            const b = spawnBoardAtFreeSpot();
+            const kind = pickBoardStrikeKind();
+            const b = spawnBoardAtFreeSpot(kind);
             if (b) {
                 boards.push(b);
+                playBoardHintSound(kind);
                 lastSpawnTime = now;
             }
         }
