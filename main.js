@@ -2472,15 +2472,10 @@ function spawnBoardAtFreeSpot(strikeKind) {
     return null;
 }
 
-/** Подсветка зон «рука / нога» на фоне — ориентир для ребёнка */
+/** Иконки зон «рука / нога» — ориентир для ребёнка без цветной подложки */
 function drawBoardZoneGuides(ctx, layout) {
     const { w, h } = layout;
     ctx.save();
-    ctx.globalAlpha = 0.11;
-    ctx.fillStyle = '#00f3ff';
-    ctx.fillRect(w * 0.06, h * BOARD_ZONE_Y.hand.yMin, w * 0.88, h * (BOARD_ZONE_Y.hand.yMax - BOARD_ZONE_Y.hand.yMin));
-    ctx.fillStyle = '#ff6ec7';
-    ctx.fillRect(w * 0.06, h * BOARD_ZONE_Y.foot.yMin, w * 0.88, h * (BOARD_ZONE_Y.foot.yMax - BOARD_ZONE_Y.foot.yMin));
     ctx.globalAlpha = 0.72;
     const fontPx = Math.min(36, w * 0.055);
     ctx.font = `bold ${fontPx}px "Segoe UI Emoji", "Apple Color Emoji", sans-serif`;
