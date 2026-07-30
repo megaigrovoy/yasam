@@ -226,12 +226,12 @@ const enPraiseUrls = Object.values(
 /** Подсказка при появлении доски — sounds/board/ru|en: hand.MP3 («Бей!»/«Рукой!»), foot.MP3 («Ногой!») */
 const ruBoardHintUrlByStem = Object.fromEntries(
     Object.entries(
-        import.meta.glob('./src/assets/sounds/board/ru/*.MP3', { eager: true, query: '?url', import: 'default' })
+        import.meta.glob('./src/assets/sounds/board/ru/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
     ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.MP3$/i, '').toLowerCase(), href])
 );
 const enBoardHintUrlByStem = Object.fromEntries(
     Object.entries(
-        import.meta.glob('./src/assets/sounds/board/en/*.MP3', { eager: true, query: '?url', import: 'default' })
+        import.meta.glob('./src/assets/sounds/board/en/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
     ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.MP3$/i, '').toLowerCase(), href])
 );
 
