@@ -2206,6 +2206,22 @@ function isCompareMode(mode) {
 }
 
 const COMPARE_SHAPES = ['circle', 'square', 'triangle', 'star'];
+/**
+ * Предметы для сравнения размеров — ключ совпадает с именем файла озвучки
+ * (bigger_apple.mp3), эмодзи берётся из готовых текстур fruitEmojiTextures.
+ */
+const COMPARE_ITEMS = [
+    { key: 'apple', emoji: '🍎' },
+    { key: 'banana', emoji: '🍌' },
+    { key: 'watermelon', emoji: '🍉' },
+    { key: 'orange', emoji: '🍊' },
+    { key: 'chicken', emoji: '🍗' },
+    { key: 'meat', emoji: '🥩' },
+    { key: 'broccoli', emoji: '🥦' },
+    { key: 'cabbage', emoji: '🥬' },
+    { key: 'eggplant', emoji: '🍆' },
+    { key: 'tomato', emoji: '🍅' }
+];
 /** Контраст размеров фиксированный, не случайный — различие должно читаться однозначно */
 const COMPARE_SIZE_BIG = 1.0;
 const COMPARE_SIZE_SMALL = 0.5;
@@ -2266,13 +2282,21 @@ function buildCompareRound() {
     const kind = Math.random() < 0.5 ? 'size' : 'shape';
 
     if (kind === 'size') {
-        /** Одна и та же фигура — различается только размер, иначе сравнение неоднозначно */
-        const shape = COMPARE_SHAPES[Math.floor(Math.random() * COMPARE_SHAPES.length)];
+        /**
+         * Один и тот же объект — различается только размер, иначе сравнение неоднозначно.
+         * Берём и геометрические фигуры, и предметы: озвучка записана для всех 14.
+         */
+        const useItem = Math.random() < 0.5;
+        const item = useItem ? COMPARE_ITEMS[Math.floor(Math.random() * COMPARE_ITEMS.length)] : null;
+        const shape = useItem ? null : COMPARE_SHAPES[Math.floor(Math.random() * COMPARE_SHAPES.length)];
+        const objectKey = useItem ? item.key : shape;
+        const base = useItem ? { emoji: item.emoji } : { shape };
+
         const askBigger = Math.random() < 0.5;
         const bigFirst = Math.random() < 0.5;
         const objects = [
-            { id: idA, shape, sizeScale: bigFirst ? COMPARE_SIZE_BIG : COMPARE_SIZE_SMALL },
-            { id: idB, shape, sizeScale: bigFirst ? COMPARE_SIZE_SMALL : COMPARE_SIZE_BIG }
+            { id: idA, ...base, sizeScale: bigFirst ? COMPARE_SIZE_BIG : COMPARE_SIZE_SMALL },
+            { id: idB, ...base, sizeScale: bigFirst ? COMPARE_SIZE_SMALL : COMPARE_SIZE_BIG }
         ];
         const bigId = bigFirst ? idA : idB;
         const smallId = bigFirst ? idB : idA;
@@ -2281,8 +2305,8 @@ function buildCompareRound() {
             task: {
                 kind: 'size',
                 taskKey: askBigger ? 'bigger' : 'smaller',
-                /** Фигура пары — озвучка согласована по роду: «большой круг», «большую звезду» */
-                shape,
+                /** Объект пары — озвучка согласована по роду: «большой круг», «большую звезду» */
+                shape: objectKey,
                 correctId: askBigger ? bigId : smallId
             }
         };
@@ -2637,7 +2661,10 @@ class Fruit {
         this.radius = baseRadius * spec.sizeScale;
         this.emoji = null;
         this.color = spec.color || GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
-        if (spec.glyph) {
+        if (spec.emoji) {
+            this.emoji = spec.emoji;
+            this.textureRef = fruitEmojiTextures[spec.emoji];
+        } else if (spec.glyph) {
             this.glyphChar = spec.glyph;
             this.textureRef = getOrCreateGlyphTexture(`cmp:${spec.glyph}:${this.color}`, spec.glyph, this.color);
         } else {
@@ -2712,7 +2739,8 @@ class Fruit {
         ctx.save();
         ctx.translate(this.x, this.y);
         /** Canvas на экране зеркалится через CSS scaleX(-1) — компенсируем только текст/буквы, чтобы читалось нормально */
-        const compensateCssMirror = this.levelMode !== 'fruit';
+        /** Компенсируем зеркало только для текста и фигур; эмодзи от разворота «ломаются» */
+        const compensateCssMirror = this.levelMode !== 'fruit' && !this.emoji;
         if (compensateCssMirror) ctx.scale(-1, 1);
 
         const texture = this.textureRef.canvas;
