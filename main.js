@@ -5,7 +5,6 @@ const MEDIAPIPE_TASKS_VISION_WASM_VER = '0.10.34';
 
 const STORAGE_SFX_OFF = 'neon-ninja-sfx-off';
 const STORAGE_MUSIC_OFF = 'neon-ninja-music-off';
-const STORAGE_PLAYER_COUNT = 'neon-ninja-player-count';
 const STORAGE_UI_LANG = 'neon-ninja-ui-lang';
 
 function loadUiLangPreference() {
@@ -13,16 +12,14 @@ function loadUiLangPreference() {
     return raw === 'en' ? 'en' : 'ru';
 }
 
-function loadPlayerCountPreference() {
-    const raw = localStorage.getItem(STORAGE_PLAYER_COUNT);
-    return raw === '1' ? 1 : 2;
-}
-
 /** ru | en — сохраняется в localStorage при переключении языка */
 let uiLang = loadUiLangPreference();
 
-/** 1 или 2 — как numPoses у PoseLandmarker */
-let playerModeCount = loadPlayerCountPreference();
+/**
+ * numPoses у PoseLandmarker. Режим на двоих сейчас не используется —
+ * зафиксировано на одном игроке, это заодно разгружает распознавание.
+ */
+let playerModeCount = 1;
 
 /** Добавьте ?perf=1 к URL — в консоли раз в ~2.5 с среднее время кадра (поиск фризов на проде) */
 const DEBUG_FRAME_PERF =
@@ -1400,7 +1397,11 @@ const CONTACT_EXIT_DEBOUNCE_FRAMES = 7;
 const MISS_PENALTY = 10;
 let currentLevelIndex = 0;
 let selectedGameMode = 'fruit';
-const MENU_GAME_MODES = ['fruit', 'number', 'word', 'compare', 'board'];
+/**
+ * Режимы, показанные в меню. Остальные уровни остаются в LEVELS и работают —
+ * просто не выведены в меню. Чтобы вернуть: дописать сюда 'fruit', 'number', 'word', 'board'.
+ */
+const MENU_GAME_MODES = ['compare'];
 
 function levelIndicesForMode(mode) {
     const out = [];
@@ -1452,7 +1453,7 @@ const I18N = {
         hudGoal: 'Цель',
         scorePrefix: 'Счёт: ',
         menuHeading: 'Выберите тип игры',
-        menuHint: 'Сложность внутри выбранного типа меняется автоматически: 1 → 2 → 3.',
+        menuHint: 'Слушай задание и разрезай нужный предмет.',
         quickSettingsAria: 'Язык, звук, музыка и число игроков',
         langLabel: 'Язык',
         playersOnCamera: 'Количество игроков',
@@ -1505,7 +1506,7 @@ const I18N = {
         hudGoal: 'Goal',
         scorePrefix: 'Score: ',
         menuHeading: 'Choose game type',
-        menuHint: 'Difficulty inside the selected type progresses automatically: 1 → 2 → 3.',
+        menuHint: 'Listen to the task and cut the right object.',
         quickSettingsAria: 'Language, sound, music and number of players',
         langLabel: 'Language',
         playersOnCamera: 'Number of players',
@@ -1626,12 +1627,6 @@ function applyUiTranslations() {
     if (mq) mq.setAttribute('aria-label', t('quickSettingsAria'));
     const ml = document.getElementById('menu-lang-label');
     if (ml) ml.textContent = t('langLabel');
-    const mpl = document.getElementById('menu-player-label');
-    if (mpl) mpl.textContent = t('playersOnCamera');
-    const wpl = document.getElementById('wrap-opt-players-1');
-    const wpr = document.getElementById('wrap-opt-players-2');
-    if (wpl) wpl.setAttribute('aria-label', t('playersOneAria'));
-    if (wpr) wpr.setAttribute('aria-label', t('playersTwoAria'));
     const mgl = document.getElementById('menu-games-gallery-label');
     const mga = document.getElementById('menu-games-gallery');
     if (mgl) mgl.textContent = t('gamesGallery');
@@ -1861,15 +1856,6 @@ if (optMusicOff) {
     });
 }
 
-const optPlayers1 = document.getElementById('opt-players-1');
-const optPlayers2 = document.getElementById('opt-players-2');
-
-function syncPlayerCountRadios() {
-    if (!optPlayers1 || !optPlayers2) return;
-    optPlayers1.checked = playerModeCount === 1;
-    optPlayers2.checked = playerModeCount === 2;
-}
-
 async function createPoseLandmarkerInstance() {
     const vision = visionTasksResolver;
     if (!vision) {
@@ -1931,22 +1917,6 @@ async function recreatePoseLandmarker() {
     await createPoseLandmarkerInstance();
 }
 
-function applyPlayerModeFromUi(userInitiated) {
-    const next = optPlayers1?.checked ? 1 : 2;
-    if (userInitiated && next === playerModeCount) return;
-    playerModeCount = next;
-    localStorage.setItem(STORAGE_PLAYER_COUNT, String(playerModeCount));
-    syncPlayerCountRadios();
-    if (userInitiated) void recreatePoseLandmarker();
-}
-
-optPlayers1?.addEventListener('change', () => {
-    if (optPlayers1.checked) applyPlayerModeFromUi(true);
-});
-optPlayers2?.addEventListener('change', () => {
-    if (optPlayers2.checked) applyPlayerModeFromUi(true);
-});
-
 const optLangRu = document.getElementById('opt-lang-ru');
 const optLangEn = document.getElementById('opt-lang-en');
 optLangRu?.addEventListener('change', () => {
@@ -1957,7 +1927,6 @@ optLangEn?.addEventListener('change', () => {
 });
 
 loadPersistedSettings();
-syncPlayerCountRadios();
 applyUiTranslations();
 
 // Geometry configuration
@@ -2300,8 +2269,15 @@ function startCompareRound() {
     /** Слот решает только положение по X — какой объект слева, выбирается случайно */
     const slots = [0, 1];
     shuffleArrayInPlace(slots);
+    /**
+     * В раундах на размер цвет одинаковый — иначе ребёнок начнёт различать по цвету,
+     * а не по величине. В раундах на форму цвета разные, чтобы предметы не сливались.
+     */
+    const palette = GLYPH_NEON_COLORS.slice();
+    shuffleArrayInPlace(palette);
+    const sameColor = round.task.kind === 'size';
     round.objects.forEach((spec, idx) => {
-        fruits.push(new Fruit({ ...spec, slot: slots[idx] }));
+        fruits.push(new Fruit({ ...spec, slot: slots[idx], color: sameColor ? palette[0] : palette[idx] }));
     });
 
     /** Небольшая пауза: сначала ребёнок видит пару, потом слышит задание */
@@ -2573,14 +2549,15 @@ class Fruit {
     initCompare(spec, w, h, minSide) {
         this.compareId = spec.id;
         this.compareShape = spec.shape;
-        this.x = w * (spec.slot === 0 ? 0.3 : 0.7);
+        /** Ближе к центру, чем края экрана: оба предмета должны попадать в поле зрения разом */
+        this.x = w * (spec.slot === 0 ? 0.38 : 0.62);
         this.y = h * 0.46;
         this.vx = 0;
         this.vy = 0;
         this.gravity = 0;
         this.radius = Math.min(170, Math.max(48, minSide * 0.125 * spec.sizeScale));
         this.emoji = null;
-        this.color = GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
+        this.color = spec.color || GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
         this.textureRef = getOrCreateShapeTexture(spec.shape, this.color);
 
         this.isSliced = false;

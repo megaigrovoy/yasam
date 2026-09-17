@@ -648,7 +648,8 @@ canvas {
 
 .level-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* auto-fit: одна кнопка занимает всю ширину, несколько — раскладываются по две */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
   gap: 0.45rem;
   isolation: isolate;
 }
