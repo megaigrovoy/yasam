@@ -1411,6 +1411,8 @@ const LEVELS = [
     { mode: 'compare', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'compareNumber', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'compareLetter', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
+    { mode: 'compareThick', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
+    { mode: 'compareTall', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 20 },
     { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 30 },
     { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 40 }
@@ -1426,7 +1428,7 @@ let selectedGameMode = 'fruit';
  * Режимы, показанные в меню. Остальные уровни остаются в LEVELS и работают —
  * просто не выведены в меню. Чтобы вернуть: дописать сюда 'fruit', 'number', 'word', 'board'.
  */
-const MENU_GAME_MODES = ['compareNumber', 'compareLetter', 'compare'];
+const MENU_GAME_MODES = ['compareNumber', 'compareLetter', 'compare', 'compareThick', 'compareTall'];
 
 function levelIndicesForMode(mode) {
     const out = [];
@@ -1463,6 +1465,8 @@ const I18N = {
         tierCompare: 'Сравнение',
         tierCompareLetters: 'Буквы',
         tierCompareNumbers: 'Цифры',
+        tierCompareThick: 'Толще и тоньше',
+        tierCompareTall: 'Выше и ниже',
         hudAtOnce: '',
         comboLabel: 'Серия',
         comboMax: 'Макс. серия',
@@ -1518,6 +1522,8 @@ const I18N = {
         tierCompare: 'Compare',
         tierCompareLetters: 'Letters',
         tierCompareNumbers: 'Numbers',
+        tierCompareThick: 'Thick and thin',
+        tierCompareTall: 'Tall and low',
         hudAtOnce: 'at once',
         comboLabel: 'Combo',
         comboMax: 'Best combo',
@@ -1606,6 +1612,10 @@ function levelTierTitle(levelIndex) {
             ? t('tierCompareLetters')
             : cfg.mode === 'compareNumber'
             ? t('tierCompareNumbers')
+            : cfg.mode === 'compareThick'
+            ? t('tierCompareThick')
+            : cfg.mode === 'compareTall'
+            ? t('tierCompareTall')
             : t('tierWords');
     return `${name} ${sub}`;
 }
@@ -2202,10 +2212,39 @@ let sequentialLetterIndex = 0;
 
 /** Все режимы, работающие по логике сравнения: пара объектов + задание голосом */
 function isCompareMode(mode) {
-    return mode === 'compare' || mode === 'compareLetter' || mode === 'compareNumber';
+    return (
+        mode === 'compare' ||
+        mode === 'compareLetter' ||
+        mode === 'compareNumber' ||
+        mode === 'compareThick' ||
+        mode === 'compareTall'
+    );
 }
 
 const COMPARE_SHAPES = ['circle', 'square', 'triangle', 'star'];
+/**
+ * Объекты для заданий на толщину и высоту. Ключ совпадает с именем файла озвучки;
+ * emoji — готовая текстура, shape — процедурная фигура.
+ */
+/**
+ * Только процедурные фигуры: сжатие эмодзи по одной оси искажает картинку —
+ * банан становится нечитаемым, и задание превращается в угадайку.
+ * Озвучка для banana/eggplant записана и ждёт, если решим их вернуть.
+ */
+const COMPARE_THICK_OBJECTS = [
+    { key: 'stick', shape: 'stick' },
+    { key: 'line', shape: 'line' }
+];
+const COMPARE_TALL_OBJECTS = [
+    { key: 'tower', shape: 'tower' },
+    { key: 'column', shape: 'column' },
+    { key: 'rect', shape: 'rect' },
+    { key: 'triangle', shape: 'triangle' }
+];
+/** Контраст по одной оси: 1.0 против 0.45 — различие должно быть очевидным */
+const COMPARE_AXIS_WIDE = 1.0;
+const COMPARE_AXIS_NARROW = 0.45;
+
 /**
  * Предметы для сравнения размеров — ключ совпадает с именем файла озвучки
  * (bigger_apple.mp3), эмодзи берётся из готовых текстур fruitEmojiTextures.
@@ -2275,6 +2314,33 @@ function buildCompareRound() {
                 /** Ключ озвучки = сам символ: tasks/ru/letters/а.mp3, tasks/ru/numbers/3.mp3 */
                 taskKey: isLetter ? pick.toLowerCase() : pick,
                 correctId: askFirst ? idA : idB
+            }
+        };
+    }
+
+    if (mode === 'compareThick' || mode === 'compareTall') {
+        const isThick = mode === 'compareThick';
+        const pool = isThick ? COMPARE_THICK_OBJECTS : COMPARE_TALL_OBJECTS;
+        const obj = pool[Math.floor(Math.random() * pool.length)];
+        const askMore = Math.random() < 0.5;
+        const wideFirst = Math.random() < 0.5;
+        const base = obj.emoji ? { emoji: obj.emoji } : { shape: obj.shape };
+
+        /** Толщина растягивает по X, высота — по Y; вторая ось остаётся неизменной */
+        const axis = (v) => (isThick ? { scaleX: v, scaleY: 0.85 } : { scaleX: 0.7, scaleY: v });
+        const objects = [
+            { id: idA, ...base, ...axis(wideFirst ? COMPARE_AXIS_WIDE : COMPARE_AXIS_NARROW) },
+            { id: idB, ...base, ...axis(wideFirst ? COMPARE_AXIS_NARROW : COMPARE_AXIS_WIDE) }
+        ];
+        const wideId = wideFirst ? idA : idB;
+        const narrowId = wideFirst ? idB : idA;
+        return {
+            objects,
+            task: {
+                kind: isThick ? 'thickness' : 'height',
+                taskKey: isThick ? (askMore ? 'thicker' : 'thinner') : askMore ? 'taller' : 'lower',
+                shape: obj.key,
+                correctId: askMore ? wideId : narrowId
             }
         };
     }
@@ -2350,7 +2416,9 @@ function startCompareRound() {
      */
     const palette = GLYPH_NEON_COLORS.slice();
     shuffleArrayInPlace(palette);
-    const sameColor = round.task.kind === 'size';
+    /** Разные цвета только там, где сравниваются сами объекты (формы, буквы, цифры).
+     *  Для свойств цвет общий — иначе ребёнок различает по цвету, а не по признаку. */
+    const sameColor = round.task.kind === 'size' || round.task.kind === 'thickness' || round.task.kind === 'height';
     round.objects.forEach((spec, idx) => {
         fruits.push(new Fruit({ ...spec, slot: slots[idx], color: sameColor ? palette[0] : palette[idx] }));
     });
@@ -2389,6 +2457,18 @@ function clampByte(v) {
 /** Геометрия фигур в долях от половины стороны текстуры — единый визуальный вес */
 function traceShapePath(ctx, shape, cx, cy, r) {
     ctx.beginPath();
+    if (shape === 'stick' || shape === 'line' || shape === 'column' || shape === 'tower' || shape === 'rect') {
+        /**
+         * Вытянутые объекты рисуются в полную клетку текстуры: пропорции задаёт
+         * не путь, а раздельное масштабирование по осям при отрисовке (scaleX/scaleY).
+         */
+        const w = r * 1.5;
+        const h = r * 1.9;
+        const round = shape === 'stick' || shape === 'line' ? Math.min(w, h) * 0.45 : Math.min(w, h) * 0.12;
+        ctx.roundRect(cx - w / 2, cy - h / 2, w, h, round);
+        ctx.closePath();
+        return;
+    }
     if (shape === 'circle') {
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
     } else if (shape === 'square') {
@@ -2658,7 +2738,16 @@ class Fruit {
          * Иначе на узких экранах оба упирались бы в минимум и разница в размере исчезала.
          */
         const baseRadius = Math.min(196, Math.max(55, minSide * 0.144));
-        this.radius = baseRadius * spec.sizeScale;
+        this.radius = baseRadius * (spec.sizeScale ?? 1);
+        /**
+         * Толщина и высота меняются по одной оси: «толще» — шире при той же высоте,
+         * «выше» — длиннее при той же ширине. Радиус для коллизии берём по большей стороне.
+         */
+        this.scaleX = spec.scaleX ?? 1;
+        this.scaleY = spec.scaleY ?? 1;
+        if (spec.scaleX || spec.scaleY) {
+            this.radius = baseRadius * Math.max(this.scaleX, this.scaleY) * 0.75;
+        }
         this.emoji = null;
         this.color = spec.color || GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
         if (spec.emoji) {
@@ -2749,6 +2838,10 @@ class Fruit {
         
         if (!this.isSliced) {
             ctx.rotate(this.rotation);
+            /** Растяжение по одной оси — для заданий на толщину и высоту */
+            const sx = this.scaleX ?? 1;
+            const sy = this.scaleY ?? 1;
+            if (sx !== 1 || sy !== 1) ctx.scale(sx, sy);
             /** Красная вспышка ошибки перекрывает подсказку — это ответ на действие прямо сейчас */
             if (this.isCompareObject && this.errorFlash > 0) {
                 ctx.shadowColor = '#ff2d55';
