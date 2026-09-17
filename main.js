@@ -3677,60 +3677,12 @@ function gameLoop(nowTime) {
             canvasCtx.shadowColor = '#00f3ff';
             canvasCtx.shadowBlur = 20;
             canvasCtx.beginPath();
-            
-            // Outer Ellipse
-            canvasCtx.ellipse(0, H * 0.5, W * 0.9, H * 3.5, 0, 0, Math.PI * 2);
-            
-            // Eye slit lower bounds
-            canvasCtx.moveTo(-W * 0.8, H * 0.3);
-            canvasCtx.lineTo(-W * 0.3, H * 0.6);
-            canvasCtx.lineTo(W * 0.3, H * 0.6);
-            canvasCtx.lineTo(W * 0.8, H * 0.3);
-            
-            // Eye slit upper curve
-            canvasCtx.moveTo(-W * 0.8, H * 0.3);
-            canvasCtx.quadraticCurveTo(0, -H * 0.2, W * 0.8, H * 0.3);
-            
-            // Lower face web (mouth/jaw)
-            canvasCtx.moveTo(0, H * 0.6);
-            canvasCtx.lineTo(0, H * 4.0);
-            
-            // Jaw V shape
-            canvasCtx.moveTo(-W * 0.6, H * 3.0);
-            canvasCtx.lineTo(0, H * 2.0);
-            canvasCtx.lineTo(W * 0.6, H * 3.0);
-            
-            // Inner diamonds
-            canvasCtx.moveTo(-W * 0.3, H * 0.6);
-            canvasCtx.lineTo(0, H * 1.5);
-            canvasCtx.lineTo(W * 0.3, H * 0.6);
-            
-            // Cheek lines
-            canvasCtx.moveTo(-W * 0.9, H * 1.5);
-            canvasCtx.lineTo(-W * 0.2, H * 1.8);
-            canvasCtx.lineTo(0, H * 2.8);
-            canvasCtx.lineTo(W * 0.2, H * 1.8);
-            canvasCtx.lineTo(W * 0.9, H * 1.5);
-            
-            // Diagonal jaw connectors
-            canvasCtx.moveTo(-W * 0.7, H * 2.5);
-            canvasCtx.lineTo(0, H * 3.5);
-            canvasCtx.lineTo(W * 0.7, H * 2.5);
-            
-            // Upper face web (forehead)
-            canvasCtx.moveTo(0, -H * 1.8);
-            canvasCtx.lineTo(0, -H * 3.0);
-            
-            canvasCtx.moveTo(-W * 0.35, -H * 1.5);
-            canvasCtx.lineTo(-W * 0.6, -H * 2.8);
-            canvasCtx.moveTo(W * 0.35, -H * 1.5);
-            canvasCtx.lineTo(W * 0.6, -H * 2.8);
-            
-            canvasCtx.moveTo(-W * 0.7, -H * 1.2);
-            canvasCtx.lineTo(-W * 0.85, -H * 1.8);
-            canvasCtx.moveTo(W * 0.7, -H * 1.2);
-            canvasCtx.lineTo(W * 0.85, -H * 1.8);
-            
+
+            /**
+             * Линии поверх лица (овал, прорезь глаз, сетка щёк и челюсти, лоб) убраны —
+             * они закрывали лицо ребёнка. Остались только повязка, пластина и уши.
+             */
+
             // Draw Metal Plate
             const pW = W * 0.3;
             const pH = H * 0.9;
@@ -3777,21 +3729,6 @@ function gameLoop(nowTime) {
             
             canvasCtx.stroke();
             
-            // Whiskers (Light cyan/white)
-            canvasCtx.strokeStyle = '#e0ffff';
-            canvasCtx.shadowColor = '#00f3ff';
-            canvasCtx.beginPath();
-            // Right
-            canvasCtx.moveTo(W * 0.6, H * 1.2); canvasCtx.lineTo(W * 1.5, H * 1.3);
-            canvasCtx.moveTo(W * 0.7, H * 1.8); canvasCtx.lineTo(W * 1.6, H * 1.8);
-            canvasCtx.moveTo(W * 0.6, H * 2.4); canvasCtx.lineTo(W * 1.5, H * 2.3);
-            // Left
-            canvasCtx.moveTo(-W * 0.6, H * 1.2); canvasCtx.lineTo(-W * 1.5, H * 1.3);
-            canvasCtx.moveTo(-W * 0.7, H * 1.8); canvasCtx.lineTo(-W * 1.6, H * 1.8);
-            canvasCtx.moveTo(-W * 0.6, H * 2.4); canvasCtx.lineTo(-W * 1.5, H * 2.3);
-            
-            canvasCtx.stroke();
-
             canvasCtx.restore();
         }
     }
