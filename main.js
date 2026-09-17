@@ -1428,8 +1428,6 @@ const LEVELS = [
     { mode: 'compare', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'compareNumber', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'compareLetter', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
-    { mode: 'compareThick', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
-    { mode: 'compareTall', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 20 },
     { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 30 },
     { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 40 }
@@ -1445,7 +1443,7 @@ let selectedGameMode = 'fruit';
  * Режимы, показанные в меню. Остальные уровни остаются в LEVELS и работают —
  * просто не выведены в меню. Чтобы вернуть: дописать сюда 'fruit', 'number', 'word', 'board'.
  */
-const MENU_GAME_MODES = ['compareNumber', 'compareLetter', 'compare', 'compareThick', 'compareTall'];
+const MENU_GAME_MODES = ['compareNumber', 'compareLetter', 'compare'];
 
 function levelIndicesForMode(mode) {
     const out = [];
@@ -1482,8 +1480,6 @@ const I18N = {
         tierCompare: 'Сравнение',
         tierCompareLetters: 'Буквы',
         tierCompareNumbers: 'Цифры',
-        tierCompareThick: 'Толще и тоньше',
-        tierCompareTall: 'Выше и ниже',
         hudAtOnce: '',
         comboLabel: 'Серия',
         comboMax: 'Макс. серия',
@@ -1539,8 +1535,6 @@ const I18N = {
         tierCompare: 'Compare',
         tierCompareLetters: 'Letters',
         tierCompareNumbers: 'Numbers',
-        tierCompareThick: 'Thick and thin',
-        tierCompareTall: 'Tall and low',
         hudAtOnce: 'at once',
         comboLabel: 'Combo',
         comboMax: 'Best combo',
@@ -1629,10 +1623,6 @@ function levelTierTitle(levelIndex) {
             ? t('tierCompareLetters')
             : cfg.mode === 'compareNumber'
             ? t('tierCompareNumbers')
-            : cfg.mode === 'compareThick'
-            ? t('tierCompareThick')
-            : cfg.mode === 'compareTall'
-            ? t('tierCompareTall')
             : t('tierWords');
     return `${name} ${sub}`;
 }
@@ -2253,9 +2243,7 @@ function isCompareMode(mode) {
     return (
         mode === 'compare' ||
         mode === 'compareLetter' ||
-        mode === 'compareNumber' ||
-        mode === 'compareThick' ||
-        mode === 'compareTall'
+        mode === 'compareNumber'
     );
 }
 
@@ -2309,6 +2297,37 @@ const COMPARE_HINT_AFTER_ERRORS = 5;
 /** Пауза перед следующей парой, чтобы ребёнок увидел награду */
 const COMPARE_NEXT_ROUND_DELAY_MS = 1200;
 
+/**
+ * Антиповтор: помним последние выданные задания и объекты, чтобы подряд
+ * не выпадало одно и то же. Ключ задания — kind+taskKey+объект.
+ */
+const COMPARE_RECENT_LIMIT = 6;
+const compareRecentTasks = [];
+const compareRecentObjects = [];
+
+function rememberCompareRound(taskSig, objectSig) {
+    compareRecentTasks.push(taskSig);
+    if (compareRecentTasks.length > 2) compareRecentTasks.shift();
+    if (objectSig) {
+        compareRecentObjects.push(objectSig);
+        if (compareRecentObjects.length > COMPARE_RECENT_LIMIT) compareRecentObjects.shift();
+    }
+}
+
+/**
+ * Выбирает элемент, которого нет среди недавних. Если все недавние — берёт
+ * любой, кроме самого последнего, чтобы не зациклиться на коротких списках.
+ */
+function pickAvoidingRecent(pool, recent, keyOf = (x) => x) {
+    const last = recent[recent.length - 1];
+    const fresh = pool.filter((x) => !recent.includes(keyOf(x)));
+    if (fresh.length) return fresh[Math.floor(Math.random() * fresh.length)];
+    /** Все были недавно — берём любой, кроме предыдущего: повтор подряд недопустим */
+    const notLast = pool.filter((x) => keyOf(x) !== last);
+    const list = notLast.length ? notLast : pool;
+    return list[Math.floor(Math.random() * list.length)];
+}
+
 /** Текущее задание: { kind: 'size'|'shape', taskKey, correctId } */
 let compareTask = null;
 let compareErrorStreak = 0;
@@ -2338,15 +2357,16 @@ function buildCompareRound() {
     if (mode === 'compareLetter' || mode === 'compareNumber') {
         const isLetter = mode === 'compareLetter';
         const pool = isLetter ? CYRILLIC_LETTERS.slice() : Array.from({ length: 10 }, (_, i) => String(i + 1));
-        shuffleArrayInPlace(pool);
-        const a = pool[0];
-        const b = pool[1];
+        const a = pickAvoidingRecent(pool, compareRecentObjects);
+        const rest = pool.filter((x) => x !== a);
+        const b = rest[Math.floor(Math.random() * rest.length)];
         const askFirst = Math.random() < 0.5;
         const objects = [
             { id: idA, glyph: a, sizeScale: COMPARE_SIZE_BIG },
             { id: idB, glyph: b, sizeScale: COMPARE_SIZE_BIG }
         ];
         const pick = askFirst ? a : b;
+        rememberCompareRound(`${mode}:${pick}`, pick);
         return {
             objects,
             task: {
@@ -2358,21 +2378,27 @@ function buildCompareRound() {
         };
     }
 
-    if (mode === 'compareThick' || mode === 'compareTall') {
-        const isThick = mode === 'compareThick';
+    /**
+     * Объединённое сравнение: размер, форма, толщина и высота идут вперемешку.
+     * Тип задания выбирается с учётом недавних, чтобы подряд не шло одно и то же.
+     */
+    const kind = pickAvoidingRecent(['size', 'shape', 'thickness', 'height'], compareRecentTasks);
+
+    if (kind === 'thickness' || kind === 'height') {
+        const isThick = kind === 'thickness';
         const pool = isThick ? COMPARE_THICK_OBJECTS : COMPARE_TALL_OBJECTS;
-        const obj = pool[Math.floor(Math.random() * pool.length)];
+        /** Внутри своего типа: у толщины и высоты списки по 4, повтор был бы заметен */
+        const obj = pickAvoidingRecent(pool, compareRecentObjects.slice(-3), (o) => o.key);
         const askMore = Math.random() < 0.5;
         const wideFirst = Math.random() < 0.5;
         const base = obj.emoji ? { emoji: obj.emoji } : { shape: obj.shape };
 
         /**
          * Толщина — сжатие по X при неизменной высоте: у вытянутых предметов это
-         * читается именно как «тоньше», предмет остаётся узнаваемым.
-         * Высота — общий масштаб: растяжение по Y раздавливало бы башню, а
-         * пропорциональное уменьшение честно выглядит как «ниже».
+         * читается как «тоньше», предмет остаётся узнаваемым.
+         * Высота — общий масштаб, причём мягкий: 0.5 по обеим осям даёт четверть
+         * площади и читается как «далеко», а не «ниже».
          */
-        /** Для высоты контраст мягче: общий масштаб 0.5 даёт четверть площади — «мелко», а не «ниже» */
         const tallNarrow = 0.68;
         const axis = (v) => {
             if (isThick) return { scaleX: v, scaleY: 1 };
@@ -2385,18 +2411,13 @@ function buildCompareRound() {
         ];
         const wideId = wideFirst ? idA : idB;
         const narrowId = wideFirst ? idB : idA;
+        const taskKey = isThick ? (askMore ? 'thicker' : 'thinner') : askMore ? 'taller' : 'lower';
+        rememberCompareRound(kind, obj.key);
         return {
             objects,
-            task: {
-                kind: isThick ? 'thickness' : 'height',
-                taskKey: isThick ? (askMore ? 'thicker' : 'thinner') : askMore ? 'taller' : 'lower',
-                shape: obj.key,
-                correctId: askMore ? wideId : narrowId
-            }
+            task: { kind: isThick ? 'thickness' : 'height', taskKey, shape: obj.key, correctId: askMore ? wideId : narrowId }
         };
     }
-
-    const kind = Math.random() < 0.5 ? 'size' : 'shape';
 
     if (kind === 'size') {
         /**
@@ -2404,10 +2425,11 @@ function buildCompareRound() {
          * Берём и геометрические фигуры, и предметы: озвучка записана для всех 14.
          */
         const useItem = Math.random() < 0.5;
-        const item = useItem ? COMPARE_ITEMS[Math.floor(Math.random() * COMPARE_ITEMS.length)] : null;
-        const shape = useItem ? null : COMPARE_SHAPES[Math.floor(Math.random() * COMPARE_SHAPES.length)];
-        const objectKey = useItem ? item.key : shape;
-        const base = useItem ? { emoji: item.emoji } : { shape };
+        const picked = useItem
+            ? pickAvoidingRecent(COMPARE_ITEMS, compareRecentObjects, (o) => o.key)
+            : pickAvoidingRecent(COMPARE_SHAPES, compareRecentObjects);
+        const objectKey = useItem ? picked.key : picked;
+        const base = useItem ? { emoji: picked.emoji } : { shape: picked };
 
         const askBigger = Math.random() < 0.5;
         const bigFirst = Math.random() < 0.5;
@@ -2417,6 +2439,7 @@ function buildCompareRound() {
         ];
         const bigId = bigFirst ? idA : idB;
         const smallId = bigFirst ? idB : idA;
+        rememberCompareRound('size', objectKey);
         return {
             objects,
             task: {
@@ -2430,22 +2453,19 @@ function buildCompareRound() {
     }
 
     /** Разные фигуры одного размера — различается только форма */
-    const pool = COMPARE_SHAPES.slice();
-    shuffleArrayInPlace(pool);
-    const shapeA = pool[0];
-    const shapeB = pool[1];
+    const shapeA = pickAvoidingRecent(COMPARE_SHAPES, compareRecentObjects);
+    const restShapes = COMPARE_SHAPES.filter((s) => s !== shapeA);
+    const shapeB = restShapes[Math.floor(Math.random() * restShapes.length)];
     const askFirst = Math.random() < 0.5;
     const objects = [
         { id: idA, shape: shapeA, sizeScale: COMPARE_SIZE_BIG },
         { id: idB, shape: shapeB, sizeScale: COMPARE_SIZE_BIG }
     ];
+    const pickedShape = askFirst ? shapeA : shapeB;
+    rememberCompareRound('shape', pickedShape);
     return {
         objects,
-        task: {
-            kind: 'shape',
-            taskKey: askFirst ? shapeA : shapeB,
-            correctId: askFirst ? idA : idB
-        }
+        task: { kind: 'shape', taskKey: pickedShape, correctId: askFirst ? idA : idB }
     };
 }
 
@@ -2696,10 +2716,7 @@ function getOrCreateGlyphTexture(cacheKey, label, color) {
     ctx.restore();
     ctx.globalAlpha = 1;
 
-    /** Светлый контур вместо чёрного: отделяет букву от видео, не утяжеляя её */
-    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-    ctx.lineWidth = Math.max(4, size * 0.016);
-    ctx.strokeText(label, cx, cy);
+    /** Без контура: от видео букву отделяет неоновое свечение под заливкой */
 
     const grad = ctx.createLinearGradient(cx - fp * 0.38, cy - fp * 0.42, cx + fp * 0.34, cy + fp * 0.48);
     grad.addColorStop(
@@ -2838,7 +2855,7 @@ class Fruit {
          * Пол и потолок применяем к большому объекту, а маленький берём долей от него.
          * Иначе на узких экранах оба упирались бы в минимум и разница в размере исчезала.
          */
-        const baseRadius = Math.min(196, Math.max(55, minSide * 0.144));
+        const baseRadius = Math.min(235, Math.max(66, minSide * 0.173));
         this.radius = baseRadius * (spec.sizeScale ?? 1);
         /**
          * Толщина и высота меняются по одной оси: «толще» — шире при той же высоте,
@@ -3963,52 +3980,8 @@ function gameLoop(nowTime) {
              */
             canvasCtx.ellipse(0, H * 0.5, W * 0.9, H * 3.5, 0, 0, Math.PI * 2);
 
-            // Draw Metal Plate
-            const pW = W * 0.3;
-            const pH = H * 0.9;
-            const pY = -H * 1.8;
-            canvasCtx.rect(-pW/2, pY, pW, pH);
-            const bY = pY + pH/2;
-            canvasCtx.moveTo(-pW*0.25 + 2, bY); canvasCtx.arc(-pW*0.25, bY, 2, 0, Math.PI*2);
-            canvasCtx.moveTo(0 + 2, bY); canvasCtx.arc(0, bY, 2, 0, Math.PI*2);
-            canvasCtx.moveTo(pW*0.25 + 2, bY); canvasCtx.arc(pW*0.25, bY, 2, 0, Math.PI*2);
-            
-            canvasCtx.stroke(); // Draw all cyan parts
-            
-            // Pink Wireframes (Ears & Headband)
-            canvasCtx.strokeStyle = '#ff00ea';
-            canvasCtx.shadowColor = '#ff00ea';
-            canvasCtx.beginPath();
-            
-            const pBotY = pY + pH;
-            // Left Headband
-            canvasCtx.moveTo(-pW/2, pBotY); canvasCtx.lineTo(-W * 0.8, -H * 0.6); // bottom edge
-            canvasCtx.moveTo(-pW/2, pY); canvasCtx.lineTo(-W * 0.8, -H * 1.0); // top edge
-            canvasCtx.moveTo(-pW/2, pBotY); canvasCtx.lineTo(-W * 0.5, pY); canvasCtx.lineTo(-W * 0.6, pBotY); canvasCtx.lineTo(-W * 0.8, -H * 1.0); // zig-zag
-            
-            // Right Headband
-            canvasCtx.moveTo(pW/2, pBotY); canvasCtx.lineTo(W * 0.8, -H * 0.6); // bottom
-            canvasCtx.moveTo(pW/2, pY); canvasCtx.lineTo(W * 0.8, -H * 1.0); // top
-            canvasCtx.moveTo(pW/2, pBotY); canvasCtx.lineTo(W * 0.5, pY); canvasCtx.lineTo(W * 0.6, pBotY); canvasCtx.lineTo(W * 0.8, -H * 1.0); // zig-zag
-            
-            // Left Ear
-            canvasCtx.moveTo(-W * 0.4, -H * 1.8);
-            canvasCtx.lineTo(-W * 0.75, -H * 4.2);
-            canvasCtx.lineTo(-W * 0.85, -H * 1.3);
-            canvasCtx.lineTo(-W * 0.4, -H * 1.8); // close
-            canvasCtx.moveTo(-W * 0.6, -H * 2.5); canvasCtx.lineTo(-W * 0.75, -H * 4.2); // inner vertical
-            canvasCtx.moveTo(-W * 0.5, -H * 3.2); canvasCtx.lineTo(-W * 0.72, -H * 2.9); // crosshatch
-            
-            // Right Ear
-            canvasCtx.moveTo(W * 0.4, -H * 1.8);
-            canvasCtx.lineTo(W * 0.75, -H * 4.2);
-            canvasCtx.lineTo(W * 0.85, -H * 1.3);
-            canvasCtx.lineTo(W * 0.4, -H * 1.8); // close
-            canvasCtx.moveTo(W * 0.6, -H * 2.5); canvasCtx.lineTo(W * 0.75, -H * 4.2); // inner vertical
-            canvasCtx.moveTo(W * 0.5, -H * 3.2); canvasCtx.lineTo(W * 0.72, -H * 2.9); // crosshatch
-            
             canvasCtx.stroke();
-            
+
             canvasCtx.restore();
         }
     }
