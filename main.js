@@ -2190,7 +2190,7 @@ let sequentialLetterIndex = 0;
 const COMPARE_SHAPES = ['circle', 'square', 'triangle', 'star'];
 /** Контраст размеров фиксированный, не случайный — различие должно читаться однозначно */
 const COMPARE_SIZE_BIG = 1.0;
-const COMPARE_SIZE_SMALL = 0.55;
+const COMPARE_SIZE_SMALL = 0.5;
 /** После стольких ошибок подряд — подсветка нужного объекта и повтор задания */
 const COMPARE_HINT_AFTER_ERRORS = 5;
 /** Пауза перед следующей парой, чтобы ребёнок увидел награду */
@@ -2571,13 +2571,18 @@ class Fruit {
     initCompare(spec, w, h, minSide) {
         this.compareId = spec.id;
         this.compareShape = spec.shape;
-        /** Ближе к центру, чем края экрана: оба предмета должны попадать в поле зрения разом */
-        this.x = w * (spec.slot === 0 ? 0.38 : 0.62);
+        /** Разнесены шире, чтобы не наезжать на игрока в центре кадра, но оба в поле зрения */
+        this.x = w * (spec.slot === 0 ? 0.3 : 0.7);
         this.y = h * 0.46;
         this.vx = 0;
         this.vy = 0;
         this.gravity = 0;
-        this.radius = Math.min(170, Math.max(48, minSide * 0.125 * spec.sizeScale));
+        /**
+         * Пол и потолок применяем к большому объекту, а маленький берём долей от него.
+         * Иначе на узких экранах оба упирались бы в минимум и разница в размере исчезала.
+         */
+        const baseRadius = Math.min(196, Math.max(55, minSide * 0.144));
+        this.radius = baseRadius * spec.sizeScale;
         this.emoji = null;
         this.color = spec.color || GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
         this.textureRef = getOrCreateShapeTexture(spec.shape, this.color);
