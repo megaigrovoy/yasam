@@ -385,10 +385,16 @@ function speakFallback(text) {
 }
 
 /** Озвучка задания «разрежь X» — файл из tasks/, иначе синтез речи */
-function playTaskSound(taskKey) {
+/**
+ * Озвучка задания. Для свойств («большой», «маленький») ищем фразу, согласованную
+ * с объектом — bigger_circle, bigger_star: в русском прилагательное меняет род,
+ * поэтому склеить «большой» + название нельзя, фраза записана целиком.
+ */
+function playTaskSound(taskKey, objectKey) {
     if (!soundEffectsEnabled || !taskKey) return;
     const map = uiLang === 'en' ? enTaskUrlByKey : ruTaskUrlByKey;
-    const url = map[String(taskKey).toLowerCase()];
+    const key = String(taskKey).toLowerCase();
+    const url = (objectKey && map[`${key}_${String(objectKey).toLowerCase()}`]) || map[key];
     if (url) {
         playOneShotSfx(url, 1.0);
         return;
@@ -1211,7 +1217,7 @@ function handleCompareCut(fruit) {
         }
         /** Подсказку сопровождаем повтором задания — ребёнок мог забыть, что просили */
         if (compareHintActive) {
-            setTimeout(() => playTaskSound(compareTask?.taskKey), 700);
+            setTimeout(() => playTaskSound(compareTask?.taskKey, compareTask?.shape), 700);
         }
         return;
     }
@@ -2213,7 +2219,13 @@ function buildCompareRound() {
         const smallId = bigFirst ? idB : idA;
         return {
             objects,
-            task: { kind: 'size', taskKey: askBigger ? 'bigger' : 'smaller', correctId: askBigger ? bigId : smallId }
+            task: {
+                kind: 'size',
+                taskKey: askBigger ? 'bigger' : 'smaller',
+                /** Фигура пары — озвучка согласована по роду: «большой круг», «большую звезду» */
+                shape,
+                correctId: askBigger ? bigId : smallId
+            }
         };
     }
 
@@ -2261,7 +2273,7 @@ function startCompareRound() {
     });
 
     /** Небольшая пауза: сначала ребёнок видит пару, потом слышит задание */
-    setTimeout(() => playTaskSound(round.task.taskKey), 450);
+    setTimeout(() => playTaskSound(round.task.taskKey, round.task.shape), 450);
 }
 
 /** Буквы и цифры: только небольшой наклон и лёгкое качание (без полного оборота и «нечитаемых» углов) */
