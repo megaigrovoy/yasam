@@ -2257,9 +2257,12 @@ const COMPARE_SHAPES = ['circle', 'square', 'triangle', 'star'];
  * банан становится нечитаемым, и задание превращается в угадайку.
  * Озвучка для banana/eggplant записана и ждёт, если решим их вернуть.
  */
+/**
+ * Карандаш и верёвка временно исключены: при сжатии по X читаются плохо.
+ * Озвучка thicker_pencil/thinner_pencil/thicker_rope/thinner_rope лежит на месте —
+ * вернуть их сюда, когда появятся отдельные картинки толстой и тонкой версии.
+ */
 const COMPARE_THICK_OBJECTS = [
-    { key: 'pencil', emoji: '✏️' },
-    { key: 'rope', emoji: '🪢' },
     { key: 'log', emoji: '🪵' },
     { key: 'candle', emoji: '🕯️' }
 ];
