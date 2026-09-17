@@ -5,15 +5,13 @@ const MEDIAPIPE_TASKS_VISION_WASM_VER = '0.10.34';
 
 const STORAGE_SFX_OFF = 'neon-ninja-sfx-off';
 const STORAGE_MUSIC_OFF = 'neon-ninja-music-off';
-const STORAGE_UI_LANG = 'neon-ninja-ui-lang';
-
-function loadUiLangPreference() {
-    const raw = localStorage.getItem(STORAGE_UI_LANG);
-    return raw === 'en' ? 'en' : 'ru';
-}
-
-/** ru | en — сохраняется в localStorage при переключении языка */
-let uiLang = loadUiLangPreference();
+/**
+ * Язык интерфейса и озвучки. Сейчас записан только русский голос, поэтому
+ * язык зафиксирован: сохранённое в localStorage значение намеренно игнорируется,
+ * иначе игроки с ранее выбранным 'en' остались бы без переключателя на английском.
+ * Английские строки и звуки в коде сохранены — вернуть можно сменой этой константы.
+ */
+let uiLang = 'ru';
 
 /**
  * numPoses у PoseLandmarker. Режим на двоих сейчас не используется —
@@ -1611,14 +1609,6 @@ function buildLevelGrid() {
     });
 }
 
-function setUiLang(lang) {
-    if (lang !== 'ru' && lang !== 'en') return;
-    uiLang = lang;
-    localStorage.setItem(STORAGE_UI_LANG, lang);
-    document.documentElement.lang = lang;
-    applyUiTranslations();
-}
-
 function applyUiTranslations() {
     const mh = document.getElementById('menu-heading');
     if (mh) mh.textContent = t('menuHeading');
@@ -1626,8 +1616,6 @@ function applyUiTranslations() {
     if (hint) hint.textContent = t('menuHint');
     const mq = document.getElementById('menu-quick-settings');
     if (mq) mq.setAttribute('aria-label', t('quickSettingsAria'));
-    const ml = document.getElementById('menu-lang-label');
-    if (ml) ml.textContent = t('langLabel');
     const mgl = document.getElementById('menu-games-gallery-label');
     const mga = document.getElementById('menu-games-gallery');
     if (mgl) mgl.textContent = t('gamesGallery');
@@ -1917,15 +1905,6 @@ async function recreatePoseLandmarker() {
     resetPoseDisplayState();
     await createPoseLandmarkerInstance();
 }
-
-const optLangRu = document.getElementById('opt-lang-ru');
-const optLangEn = document.getElementById('opt-lang-en');
-optLangRu?.addEventListener('change', () => {
-    if (optLangRu.checked) setUiLang('ru');
-});
-optLangEn?.addEventListener('change', () => {
-    if (optLangEn.checked) setUiLang('en');
-});
 
 loadPersistedSettings();
 applyUiTranslations();

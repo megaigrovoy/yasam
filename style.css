@@ -692,12 +692,10 @@ canvas {
 
 @media (min-width: 700px) {
   .menu-quick-settings {
+    /* Осталась только аудио-колонка: язык и число игроков убраны из меню */
     display: grid;
-    grid-template-columns: 1.08fr 1fr;
-    grid-template-areas:
-      "audio lang"
-      "audio players";
-    column-gap: 0.48rem;
+    grid-template-columns: 1fr;
+    grid-template-areas: "audio";
     row-gap: 0.45rem;
     align-items: stretch;
   }
