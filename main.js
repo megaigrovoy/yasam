@@ -365,6 +365,21 @@ function playWordSound(word) {
  */
 const TASK_SPEECH_FALLBACK = {
     ru: {
+        /** Фоллбэк для новых объектов, пока нет записи — род согласован вручную */
+        thicker_pencil: 'Разрежь толстый карандаш',
+        thinner_pencil: 'Разрежь тонкий карандаш',
+        thicker_rope: 'Разрежь толстую верёвку',
+        thinner_rope: 'Разрежь тонкую верёвку',
+        thicker_log: 'Разрежь толстое бревно',
+        thinner_log: 'Разрежь тонкое бревно',
+        thicker_candle: 'Разрежь толстую свечу',
+        thinner_candle: 'Разрежь тонкую свечу',
+        taller_tree: 'Разрежь высокую ёлку',
+        lower_tree: 'Разрежь низкую ёлку',
+        taller_house: 'Разрежь высокий дом',
+        lower_house: 'Разрежь низкий дом',
+        taller_castle: 'Разрежь высокий замок',
+        lower_castle: 'Разрежь низкий замок',
         bigger: 'Разрежь большой',
         smaller: 'Разрежь маленький',
         circle: 'Разрежь круг',
@@ -417,7 +432,9 @@ function playTaskSound(taskKey, objectKey, taskKind) {
         playOneShotSfx(url, 1.0);
         return;
     }
-    speakFallback((TASK_SPEECH_FALLBACK[uiLang] || TASK_SPEECH_FALLBACK.ru)[taskKey]);
+    const fb = TASK_SPEECH_FALLBACK[uiLang] || TASK_SPEECH_FALLBACK.ru;
+    /** Сначала фраза под конкретный объект, иначе общая — род может не совпасть, но смысл сохранится */
+    speakFallback((objectKey && fb[`${key}_${String(objectKey).toLowerCase()}`]) || fb[taskKey]);
 }
 
 /** Мягкий сигнал ошибки — не должен пугать ребёнка */
@@ -2152,6 +2169,27 @@ async function initializeModels() {
 // Game Objects
 const fruitEmojiTextures = {};
 
+/**
+ * Текстура произвольного эмодзи по требованию. initFruitTextures готовит только
+ * десятку продуктов; объекты сравнения (карандаш, башня…) приходят сюда.
+ */
+function getOrCreateEmojiTexture(emoji) {
+    let hit = fruitEmojiTextures[emoji];
+    if (hit) return hit;
+    const size = 600;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const ctx = c.getContext('2d');
+    ctx.font = `${size * 0.8}px Arial`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, size / 2, size / 2 + 10);
+    hit = { canvas: c, size };
+    fruitEmojiTextures[emoji] = hit;
+    return hit;
+}
+
 function initFruitTextures() {
     const emojis = ['🍌', '🍎', '🍉', '🍊', '🍗', '🥩', '🥦', '🥬', '🍆', '🍅'];
     const size = 600; // max size matching largest fruit radius
@@ -2232,18 +2270,20 @@ const COMPARE_SHAPES = ['circle', 'square', 'triangle', 'star'];
  * Озвучка для banana/eggplant записана и ждёт, если решим их вернуть.
  */
 const COMPARE_THICK_OBJECTS = [
-    { key: 'stick', shape: 'stick' },
-    { key: 'line', shape: 'line' }
+    { key: 'pencil', emoji: '✏️' },
+    { key: 'rope', emoji: '🪢' },
+    { key: 'log', emoji: '🪵' },
+    { key: 'candle', emoji: '🕯️' }
 ];
 const COMPARE_TALL_OBJECTS = [
-    { key: 'tower', shape: 'tower' },
-    { key: 'column', shape: 'column' },
-    { key: 'rect', shape: 'rect' },
-    { key: 'triangle', shape: 'triangle' }
+    { key: 'tower', emoji: '🗼' },
+    { key: 'tree', emoji: '🌲' },
+    { key: 'house', emoji: '🏢' },
+    { key: 'castle', emoji: '🏰' }
 ];
-/** Контраст по одной оси: 1.0 против 0.45 — различие должно быть очевидным */
+/** Контраст: 1.0 против 0.5 — различие очевидно, но предмет ещё узнаваем */
 const COMPARE_AXIS_WIDE = 1.0;
-const COMPARE_AXIS_NARROW = 0.45;
+const COMPARE_AXIS_NARROW = 0.5;
 
 /**
  * Предметы для сравнения размеров — ключ совпадает с именем файла озвучки
@@ -2326,8 +2366,19 @@ function buildCompareRound() {
         const wideFirst = Math.random() < 0.5;
         const base = obj.emoji ? { emoji: obj.emoji } : { shape: obj.shape };
 
-        /** Толщина растягивает по X, высота — по Y; вторая ось остаётся неизменной */
-        const axis = (v) => (isThick ? { scaleX: v, scaleY: 0.85 } : { scaleX: 1, scaleY: v });
+        /**
+         * Толщина — сжатие по X при неизменной высоте: у вытянутых предметов это
+         * читается именно как «тоньше», предмет остаётся узнаваемым.
+         * Высота — общий масштаб: растяжение по Y раздавливало бы башню, а
+         * пропорциональное уменьшение честно выглядит как «ниже».
+         */
+        /** Для высоты контраст мягче: общий масштаб 0.5 даёт четверть площади — «мелко», а не «ниже» */
+        const tallNarrow = 0.68;
+        const axis = (v) => {
+            if (isThick) return { scaleX: v, scaleY: 1 };
+            const k = v === COMPARE_AXIS_WIDE ? 1 : tallNarrow;
+            return { scaleX: k, scaleY: k };
+        };
         const objects = [
             { id: idA, ...base, ...axis(wideFirst ? COMPARE_AXIS_WIDE : COMPARE_AXIS_NARROW) },
             { id: idB, ...base, ...axis(wideFirst ? COMPARE_AXIS_NARROW : COMPARE_AXIS_WIDE) }
@@ -2802,7 +2853,7 @@ class Fruit {
         this.color = spec.color || GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
         if (spec.emoji) {
             this.emoji = spec.emoji;
-            this.textureRef = fruitEmojiTextures[spec.emoji];
+            this.textureRef = getOrCreateEmojiTexture(spec.emoji);
         } else if (spec.glyph) {
             this.glyphChar = spec.glyph;
             this.textureRef = getOrCreateGlyphTexture(`cmp:${spec.glyph}:${this.color}`, spec.glyph, this.color);
