@@ -1206,6 +1206,7 @@ function handleCompareCut(fruit) {
     if (!fruit.isCompareCorrect) {
         compareErrorStreak += 1;
         fruit.hitFlash = 0;
+        fruit.errorFlash = 1;
         playErrorSound();
         if (compareErrorStreak >= COMPARE_HINT_AFTER_ERRORS && !compareHintActive) {
             compareHintActive = true;
@@ -2342,6 +2343,27 @@ function traceShapePath(ctx, shape, cx, cy, r) {
     }
 }
 
+/**
+ * Красный силуэт фигуры для вспышки ошибки. Рисуется в отдельном буфере через
+ * source-atop, чтобы подкрасить только саму фигуру, а не видео под ней.
+ */
+const errorTintCache = new WeakMap();
+function getErrorTintTexture(textureRef) {
+    let hit = errorTintCache.get(textureRef);
+    if (hit) return hit;
+    const size = textureRef.size;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const tctx = c.getContext('2d');
+    tctx.drawImage(textureRef.canvas, 0, 0);
+    tctx.globalCompositeOperation = 'source-atop';
+    tctx.fillStyle = '#ff2d55';
+    tctx.fillRect(0, 0, size, size);
+    errorTintCache.set(textureRef, c);
+    return c;
+}
+
 /** Текстура геометрической фигуры — тот же неоновый стиль, что у букв/цифр */
 function getOrCreateShapeTexture(shape, color) {
     const versionedKey = `s1:${shape}:${color}`;
@@ -2567,6 +2589,8 @@ class Fruit {
         this._noContactFrames = 0;
         /** Фаза пульсации подсказки — растёт только когда подсветка включена */
         this.hintPulse = 0;
+        /** Красная вспышка при неверном выборе: 1 → 0, затухает за ~0.5 с */
+        this.errorFlash = 0;
 
         this.rotation = 0;
         this.rotationSpeed = 0;
@@ -2585,6 +2609,8 @@ class Fruit {
     update(dt = 1) {
         if (this.levelMode === 'compare') {
             if (this.hitFlash > 0) this.hitFlash -= 0.35 * dt;
+            /** ~0.9 с на затухание: ребёнку нужно время заметить и связать с действием */
+            if (this.errorFlash > 0) this.errorFlash = Math.max(0, this.errorFlash - 0.0185 * dt);
             if (compareHintActive && this.isCompareCorrect && !this.isSliced) {
                 this.hintPulse += 0.09 * dt;
             }
@@ -2633,8 +2659,11 @@ class Fruit {
         
         if (!this.isSliced) {
             ctx.rotate(this.rotation);
-            /** Мягкая пульсация подсказки после серии ошибок — не мигание, чтобы не перегружать */
-            if (this.levelMode === 'compare' && compareHintActive && this.isCompareCorrect) {
+            /** Красная вспышка ошибки перекрывает подсказку — это ответ на действие прямо сейчас */
+            if (this.levelMode === 'compare' && this.errorFlash > 0) {
+                ctx.shadowColor = '#ff2d55';
+                ctx.shadowBlur = 26 + this.errorFlash * 44;
+            } else if (this.levelMode === 'compare' && compareHintActive && this.isCompareCorrect) {
                 const pulse = 0.5 + 0.5 * Math.sin(this.hintPulse);
                 ctx.shadowColor = '#7CFFB2';
                 ctx.shadowBlur = 30 + pulse * 34;
@@ -2645,6 +2674,14 @@ class Fruit {
             }
             ctx.drawImage(texture, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
             ctx.shadowBlur = 0;
+            /** Подкрашиваем сам силуэт — на яркой фигуре одного свечения не видно */
+            if (this.levelMode === 'compare' && this.errorFlash > 0) {
+                const tint = getErrorTintTexture(this.textureRef);
+                ctx.save();
+                ctx.globalAlpha = 0.65 * this.errorFlash;
+                ctx.drawImage(tint, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
+                ctx.restore();
+            }
         } else {
             ctx.save();
             ctx.translate(Math.cos(this.cutAngle + Math.PI) * this.sliceOffsetX, Math.sin(this.cutAngle + Math.PI) * this.sliceOffsetX);
@@ -4103,7 +4140,8 @@ if (import.meta.env?.DEV) {
                 radius: Math.round(f.radius),
                 x: Math.round(f.x),
                 correct: f.isCompareCorrect,
-                sliced: f.isSliced
+                sliced: f.isSliced,
+                errorFlash: Number((f.errorFlash || 0).toFixed(2))
             }))
         }),
         /** Имитирует рез объекта рукой */
