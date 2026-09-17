@@ -1,4 +1,15 @@
 :root {
+  /* Палитра меню взята из логотипа Yasam Games: сиреневый фон, фиолетовый пазл, бирюзовый акцент */
+  --brand-purple: #5b3a76;
+  --brand-purple-light: #8a63ab;
+  --brand-teal: #6fd6dd;
+  --brand-lilac: #d9c2f5;
+  --brand-lilac-soft: #efe4fb;
+  --menu-bg: #241733;
+  --menu-panel: #32204a;
+  --menu-text: #f6efff;
+
+  /* Игровой слой остаётся неоновым — маска и глифы рассчитаны на эти цвета */
   --neon-cyan: #00f3ff;
   --neon-magenta: #ff00ea;
   --bg-dark: #0f0f13;
@@ -133,9 +144,9 @@ canvas {
 .menu-quick-settings {
   padding: 0.65rem 0.72rem;
   border-radius: 12px;
-  border: 1px solid rgba(0, 243, 255, 0.28);
-  background: linear-gradient(165deg, rgba(12, 18, 32, 0.94) 0%, rgba(8, 8, 14, 0.9) 100%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 0 18px rgba(0, 243, 255, 0.1);
+  border: 1px solid rgba(217, 194, 245, 0.24);
+  background: linear-gradient(165deg, rgba(58, 38, 84, 0.94) 0%, rgba(36, 23, 51, 0.9) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 0 18px rgba(111, 214, 221, 0.08);
 }
 
 .menu-main-controls {
@@ -206,9 +217,9 @@ canvas {
   margin-top: 0;
   padding: 0.45rem 0.6rem;
   border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
+  border: 1px solid rgba(217, 194, 245, 0.26);
+  background: rgba(217, 194, 245, 0.08);
+  color: var(--menu-text);
   font-family: inherit;
   font-size: 0.76rem;
   font-weight: 700;
@@ -218,9 +229,9 @@ canvas {
 }
 
 .menu-games-link:hover {
-  border-color: var(--neon-cyan);
-  background: rgba(0, 243, 255, 0.1);
-  box-shadow: 0 0 12px rgba(0, 243, 255, 0.28);
+  border-color: var(--brand-teal);
+  background: rgba(111, 214, 221, 0.14);
+  box-shadow: 0 0 12px rgba(111, 214, 221, 0.3);
 }
 
 .menu-games-link-icon {
@@ -274,9 +285,9 @@ canvas {
   width: 100%;
   padding: 0.45rem 0.65rem;
   border-radius: 10px;
-  border: 1px solid rgba(0, 243, 255, 0.35);
-  background: rgba(8, 12, 22, 0.85);
-  color: #e6faff;
+  border: 1px solid rgba(111, 214, 221, 0.4);
+  background: rgba(45, 29, 64, 0.85);
+  color: var(--menu-text);
   font: inherit;
   font-size: 0.85rem;
   font-weight: 700;
@@ -290,8 +301,8 @@ canvas {
 }
 
 .btn-fullscreen:hover {
-  border-color: var(--neon-cyan);
-  box-shadow: 0 0 16px rgba(0, 243, 255, 0.35);
+  border-color: var(--brand-teal);
+  box-shadow: 0 0 16px rgba(111, 214, 221, 0.35);
 }
 
 .btn-fullscreen-on,
@@ -318,7 +329,7 @@ canvas {
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   /* Полностью без backdrop-filter — на Windows+Chrome размытие часто даёт рывки при hover соседей */
-  background: rgba(8, 8, 12, 0.94);
+  background: linear-gradient(180deg, #1c1128 0%, #120b1c 100%);
 }
 
 .menu-overlay.is-hidden {
@@ -330,9 +341,9 @@ canvas {
   max-width: min(560px, 94vw);
   padding: 1.15rem 1.25rem;
   border-radius: 22px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(18, 18, 24, 0.92);
-  box-shadow: 0 0 40px rgba(0, 243, 255, 0.15), 0 0 60px rgba(255, 0, 234, 0.08);
+  border: 1px solid rgba(217, 194, 245, 0.28);
+  background: linear-gradient(168deg, var(--menu-panel) 0%, var(--menu-bg) 100%);
+  box-shadow: 0 0 44px rgba(111, 214, 221, 0.16), 0 18px 48px rgba(0, 0, 0, 0.45);
   text-align: center;
   transform: translateZ(0);
   flex-shrink: 0;
@@ -352,7 +363,7 @@ canvas {
   object-fit: contain;
   border-radius: 12px;
   /* Двойной drop-shadow на webp заставляет Chrome перефильтровывать картинку при hover соседей — очень дорого */
-  box-shadow: 0 0 20px rgba(0, 243, 255, 0.22), 0 0 36px rgba(255, 0, 234, 0.12);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
 }
 
 .menu-heading {
@@ -360,8 +371,8 @@ canvas {
   font-weight: 800;
   margin-top: 0;
   margin-bottom: 0.35rem;
-  color: var(--neon-cyan);
-  text-shadow: 0 0 10px rgba(0, 243, 255, 0.4);
+  color: var(--brand-teal);
+  text-shadow: 0 0 12px rgba(111, 214, 221, 0.35);
 }
 
 .menu-hint {
@@ -648,8 +659,8 @@ canvas {
 
 .level-grid {
   display: grid;
-  /* auto-fit: одна кнопка занимает всю ширину, несколько — раскладываются по две */
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  /* Категории — по одной в ряд: равная ширина, без «осиротевшей» кнопки в неполном ряду */
+  grid-template-columns: 1fr;
   gap: 0.45rem;
   isolation: isolate;
 }
@@ -663,9 +674,9 @@ canvas {
   gap: 0.2rem;
   padding: 0.62rem 0.45rem;
   border-radius: 11px;
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  background: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  border: 1px solid rgba(217, 194, 245, 0.3);
+  background: rgba(217, 194, 245, 0.09);
+  color: var(--menu-text);
   cursor: pointer;
   /* Только композитные свойства — без анимации background (полная перерисовка кнопки) */
   transition: transform 0.12s cubic-bezier(0.25, 0.8, 0.25, 1), border-color 0.12s ease, box-shadow 0.12s ease;
@@ -674,13 +685,13 @@ canvas {
 
 .level-btn:hover {
   transform: translateY(-2px) translateZ(0);
-  border-color: var(--neon-magenta);
-  box-shadow: 0 0 18px rgba(255, 0, 234, 0.35);
-  background: rgba(255, 0, 234, 0.08);
+  border-color: var(--brand-teal);
+  box-shadow: 0 0 18px rgba(111, 214, 221, 0.32);
+  background: rgba(111, 214, 221, 0.12);
 }
 
 .level-btn .level-title {
-  font-size: 0.9rem;
+  font-size: 1.05rem;
   font-weight: 800;
 }
 

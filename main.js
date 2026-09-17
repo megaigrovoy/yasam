@@ -246,6 +246,18 @@ const enTaskUrlByKey = Object.fromEntries(
     ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
 );
 
+/** Задания на буквы и цифры — tasks/ru/letters/а.mp3, tasks/ru/numbers/3.mp3 */
+const ruLetterTaskUrlByKey = Object.fromEntries(
+    Object.entries(
+        import.meta.glob('./src/assets/sounds/tasks/ru/letters/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
+    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
+);
+const ruNumberTaskUrlByKey = Object.fromEntries(
+    Object.entries(
+        import.meta.glob('./src/assets/sounds/tasks/ru/numbers/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
+    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
+);
+
 /** Обратная связь — sounds/feedback/ru|en: error.mp3 + praise_1..N.mp3 (случайная похвала) */
 const ruFeedbackUrlByKey = Object.fromEntries(
     Object.entries(
@@ -390,8 +402,14 @@ function speakFallback(text) {
  * с объектом — bigger_circle, bigger_star: в русском прилагательное меняет род,
  * поэтому склеить «большой» + название нельзя, фраза записана целиком.
  */
-function playTaskSound(taskKey, objectKey) {
+function playTaskSound(taskKey, objectKey, taskKind) {
     if (!soundEffectsEnabled || !taskKey) return;
+    if (taskKind === 'letter' || taskKind === 'number') {
+        const glyphMap = taskKind === 'letter' ? ruLetterTaskUrlByKey : ruNumberTaskUrlByKey;
+        const glyphUrl = glyphMap[String(taskKey).toLowerCase()];
+        if (glyphUrl) playOneShotSfx(glyphUrl, 1.0);
+        return;
+    }
     const map = uiLang === 'en' ? enTaskUrlByKey : ruTaskUrlByKey;
     const key = String(taskKey).toLowerCase();
     const url = (objectKey && map[`${key}_${String(objectKey).toLowerCase()}`]) || map[key];
@@ -1217,7 +1235,7 @@ function handleCompareCut(fruit) {
         }
         /** Подсказку сопровождаем повтором задания — ребёнок мог забыть, что просили */
         if (compareHintActive) {
-            setTimeout(() => playTaskSound(compareTask?.taskKey, compareTask?.shape), 700);
+            setTimeout(() => playTaskSound(compareTask?.taskKey, compareTask?.shape, compareTask?.kind), 700);
         }
         return;
     }
@@ -1391,6 +1409,8 @@ const LEVELS = [
     { mode: 'word', maxConcurrent: 4, spawnIntervalMs: 1200, wordGoal: 22 },
     /** Сравнение: пара объектов на одной высоте, спавн ручной (раундами), интервал не используется */
     { mode: 'compare', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
+    { mode: 'compareNumber', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
+    { mode: 'compareLetter', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 20 },
     { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 30 },
     { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 40 }
@@ -1406,7 +1426,7 @@ let selectedGameMode = 'fruit';
  * Режимы, показанные в меню. Остальные уровни остаются в LEVELS и работают —
  * просто не выведены в меню. Чтобы вернуть: дописать сюда 'fruit', 'number', 'word', 'board'.
  */
-const MENU_GAME_MODES = ['compare'];
+const MENU_GAME_MODES = ['compareNumber', 'compareLetter', 'compare'];
 
 function levelIndicesForMode(mode) {
     const out = [];
@@ -1441,6 +1461,8 @@ const I18N = {
         tierWords: 'Слова',
         tierBoards: 'Доски',
         tierCompare: 'Сравнение',
+        tierCompareLetters: 'Буквы',
+        tierCompareNumbers: 'Цифры',
         hudAtOnce: '',
         comboLabel: 'Серия',
         comboMax: 'Макс. серия',
@@ -1494,6 +1516,8 @@ const I18N = {
         tierWords: 'Words',
         tierBoards: 'Boards',
         tierCompare: 'Compare',
+        tierCompareLetters: 'Letters',
+        tierCompareNumbers: 'Numbers',
         hudAtOnce: 'at once',
         comboLabel: 'Combo',
         comboMax: 'Best combo',
@@ -1578,6 +1602,10 @@ function levelTierTitle(levelIndex) {
             ? t('tierBoards')
             : cfg.mode === 'compare'
             ? t('tierCompare')
+            : cfg.mode === 'compareLetter'
+            ? t('tierCompareLetters')
+            : cfg.mode === 'compareNumber'
+            ? t('tierCompareNumbers')
             : t('tierWords');
     return `${name} ${sub}`;
 }
@@ -2172,6 +2200,11 @@ let sequentialLetterIndex = 0;
  * Неверный рез не разрезает объект: звучит мягкая ошибка, задание остаётся.
  */
 
+/** Все режимы, работающие по логике сравнения: пара объектов + задание голосом */
+function isCompareMode(mode) {
+    return mode === 'compare' || mode === 'compareLetter' || mode === 'compareNumber';
+}
+
 const COMPARE_SHAPES = ['circle', 'square', 'triangle', 'star'];
 /** Контраст размеров фиксированный, не случайный — различие должно читаться однозначно */
 const COMPARE_SIZE_BIG = 1.0;
@@ -2202,9 +2235,35 @@ function resetCompareState() {
  * Возвращает { objects: [{id, shape, sizeScale}, …], task }.
  */
 function buildCompareRound() {
-    const kind = Math.random() < 0.5 ? 'size' : 'shape';
+    const mode = getCurrentLevelConfig().mode;
     const idA = ++compareObjectSeq;
     const idB = ++compareObjectSeq;
+
+    /** Буквы и цифры: пара глифов, различие только в символе */
+    if (mode === 'compareLetter' || mode === 'compareNumber') {
+        const isLetter = mode === 'compareLetter';
+        const pool = isLetter ? CYRILLIC_LETTERS.slice() : Array.from({ length: 10 }, (_, i) => String(i + 1));
+        shuffleArrayInPlace(pool);
+        const a = pool[0];
+        const b = pool[1];
+        const askFirst = Math.random() < 0.5;
+        const objects = [
+            { id: idA, glyph: a, sizeScale: COMPARE_SIZE_BIG },
+            { id: idB, glyph: b, sizeScale: COMPARE_SIZE_BIG }
+        ];
+        const pick = askFirst ? a : b;
+        return {
+            objects,
+            task: {
+                kind: isLetter ? 'letter' : 'number',
+                /** Ключ озвучки = сам символ: tasks/ru/letters/а.mp3, tasks/ru/numbers/3.mp3 */
+                taskKey: isLetter ? pick.toLowerCase() : pick,
+                correctId: askFirst ? idA : idB
+            }
+        };
+    }
+
+    const kind = Math.random() < 0.5 ? 'size' : 'shape';
 
     if (kind === 'size') {
         /** Одна и та же фигура — различается только размер, иначе сравнение неоднозначно */
@@ -2273,7 +2332,7 @@ function startCompareRound() {
     });
 
     /** Небольшая пауза: сначала ребёнок видит пару, потом слышит задание */
-    setTimeout(() => playTaskSound(round.task.taskKey, round.task.shape), 450);
+    setTimeout(() => playTaskSound(round.task.taskKey, round.task.shape, round.task.kind), 450);
 }
 
 /** Буквы и цифры: только небольшой наклон и лёгкое качание (без полного оборота и «нечитаемых» углов) */
@@ -2560,6 +2619,8 @@ class Fruit {
      * Позиция по X задаётся слотом (левый/правый), Y общий — различие только в предмете.
      */
     initCompare(spec, w, h, minSide) {
+        /** Помечаем объект как участника сравнения — режимов сравнения несколько */
+        this.isCompareObject = true;
         this.compareId = spec.id;
         this.compareShape = spec.shape;
         /** Разнесены шире, чтобы не наезжать на игрока в центре кадра, но оба в поле зрения */
@@ -2576,7 +2637,12 @@ class Fruit {
         this.radius = baseRadius * spec.sizeScale;
         this.emoji = null;
         this.color = spec.color || GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
-        this.textureRef = getOrCreateShapeTexture(spec.shape, this.color);
+        if (spec.glyph) {
+            this.glyphChar = spec.glyph;
+            this.textureRef = getOrCreateGlyphTexture(`cmp:${spec.glyph}:${this.color}`, spec.glyph, this.color);
+        } else {
+            this.textureRef = getOrCreateShapeTexture(spec.shape, this.color);
+        }
 
         this.isSliced = false;
         this.sliceOffsetX = 0;
@@ -2603,7 +2669,7 @@ class Fruit {
     }
 
     update(dt = 1) {
-        if (this.levelMode === 'compare') {
+        if (this.isCompareObject) {
             if (this.hitFlash > 0) this.hitFlash -= 0.35 * dt;
             /** ~0.9 с на затухание: ребёнку нужно время заметить и связать с действием */
             if (this.errorFlash > 0) this.errorFlash = Math.max(0, this.errorFlash - 0.0185 * dt);
@@ -2656,10 +2722,10 @@ class Fruit {
         if (!this.isSliced) {
             ctx.rotate(this.rotation);
             /** Красная вспышка ошибки перекрывает подсказку — это ответ на действие прямо сейчас */
-            if (this.levelMode === 'compare' && this.errorFlash > 0) {
+            if (this.isCompareObject && this.errorFlash > 0) {
                 ctx.shadowColor = '#ff2d55';
                 ctx.shadowBlur = 26 + this.errorFlash * 44;
-            } else if (this.levelMode === 'compare' && compareHintActive && this.isCompareCorrect) {
+            } else if (this.isCompareObject && compareHintActive && this.isCompareCorrect) {
                 const pulse = 0.5 + 0.5 * Math.sin(this.hintPulse);
                 ctx.shadowColor = '#7CFFB2';
                 ctx.shadowBlur = 30 + pulse * 34;
@@ -2671,7 +2737,7 @@ class Fruit {
             ctx.drawImage(texture, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
             ctx.shadowBlur = 0;
             /** Подкрашиваем сам силуэт — на яркой фигуре одного свечения не видно */
-            if (this.levelMode === 'compare' && this.errorFlash > 0) {
+            if (this.isCompareObject && this.errorFlash > 0) {
                 const tint = getErrorTintTexture(this.textureRef);
                 ctx.save();
                 ctx.globalAlpha = 0.65 * this.errorFlash;
@@ -3842,13 +3908,13 @@ function gameLoop(nowTime) {
     const unslicedCount = fruits.filter((f) => !f.isSliced).length;
     /** В режиме слов — строго одна нужная буква на экране, чтобы ребёнок видел ровно ту, что нужна */
     const effectiveMaxConcurrent = levelCfg.mode === 'word' ? 1 : levelCfg.maxConcurrent;
-    if (levelCfg.mode !== 'board' && levelCfg.mode !== 'compare' && !levelComplete && !wordRevealActive && now - lastSpawnTime >= levelCfg.spawnIntervalMs && unslicedCount < effectiveMaxConcurrent) {
+    if (levelCfg.mode !== 'board' && !isCompareMode(levelCfg.mode) && !levelComplete && !wordRevealActive && now - lastSpawnTime >= levelCfg.spawnIntervalMs && unslicedCount < effectiveMaxConcurrent) {
         fruits.push(new Fruit());
         lastSpawnTime = now;
     }
 
     /** Режим сравнения: раунды идут по одному, следующий — после паузы на награду */
-    if (levelCfg.mode === 'compare' && !levelComplete) {
+    if (isCompareMode(levelCfg.mode) && !levelComplete) {
         if (!compareTask) {
             startCompareRound();
         } else if (compareRoundResolved && now >= compareNextRoundAt) {
@@ -3918,7 +3984,7 @@ function gameLoop(nowTime) {
                 fruit._wasTouchingHand = true;
             }
 
-            if (cutStroke && fruit.levelMode === 'compare') {
+            if (cutStroke && fruit.isCompareObject) {
                 handleCompareCut(fruit);
                 continue;
             }
