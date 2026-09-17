@@ -1,22 +1,22 @@
 {
-  "name": "NeonNinjaCat",
-  "short_name": "NeonNinja",
+  "name": "Ya Sam",
+  "short_name": "Ya Sam",
   "start_url": "/",
   "scope": "/",
   "display": "fullscreen",
   "display_override": ["fullscreen", "standalone"],
   "orientation": "any",
-  "background_color": "#0f0f13",
-  "theme_color": "#0f0f13",
+  "background_color": "#241733",
+  "theme_color": "#241733",
   "icons": [
     {
-      "src": "/neoncat-icon.webp",
+      "src": "/yasam-icon.webp",
       "sizes": "480x480",
       "type": "image/webp",
       "purpose": "any"
     },
     {
-      "src": "/neoncat-icon.webp",
+      "src": "/yasam-icon.webp",
       "sizes": "480x480",
       "type": "image/webp",
       "purpose": "maskable"

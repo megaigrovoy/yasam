@@ -1892,7 +1892,7 @@ if (optMusicOff) {
 async function createPoseLandmarkerInstance() {
     const vision = visionTasksResolver;
     if (!vision) {
-        console.warn('[NeonNinjaCat] createPoseLandmarkerInstance: vision resolver not ready');
+        console.warn('[YaSam] createPoseLandmarkerInstance: vision resolver not ready');
         return;
     }
     const np = playerModeCount === 1 ? 1 : 2;
@@ -1996,7 +1996,7 @@ function resizeCanvas() {
     if ((iw < vw || ih < vh) && !loggedCanvasBufferCap) {
         loggedCanvasBufferCap = true;
         console.info(
-            `[NeonNinjaCat] буфер canvas ограничен ${iw}×${ih} px (окно ${vw}×${vh}) — иначе полный размер сильно грузит GPU/CPU`
+            `[YaSam] буфер canvas ограничен ${iw}×${ih} px (окно ${vw}×${vh}) — иначе полный размер сильно грузит GPU/CPU`
         );
     }
 
@@ -2138,7 +2138,7 @@ async function initializeModels() {
             `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MEDIAPIPE_TASKS_VISION_WASM_VER}/wasm`
         );
     }
-    console.info(`[NeonNinjaCat] MediaPipe WASM: ${visionWasmSource} ← ${wasmLocal}`);
+    console.info(`[YaSam] MediaPipe WASM: ${visionWasmSource} ← ${wasmLocal}`);
 
     visionTasksResolver = vision;
     await createPoseLandmarkerInstance();
@@ -2327,7 +2327,7 @@ function buildCompareRound() {
         const base = obj.emoji ? { emoji: obj.emoji } : { shape: obj.shape };
 
         /** Толщина растягивает по X, высота — по Y; вторая ось остаётся неизменной */
-        const axis = (v) => (isThick ? { scaleX: v, scaleY: 0.85 } : { scaleX: 0.7, scaleY: v });
+        const axis = (v) => (isThick ? { scaleX: v, scaleY: 0.85 } : { scaleX: 1, scaleY: v });
         const objects = [
             { id: idA, ...base, ...axis(wideFirst ? COMPARE_AXIS_WIDE : COMPARE_AXIS_NARROW) },
             { id: idB, ...base, ...axis(wideFirst ? COMPARE_AXIS_NARROW : COMPARE_AXIS_WIDE) }
@@ -2457,15 +2457,67 @@ function clampByte(v) {
 /** Геометрия фигур в долях от половины стороны текстуры — единый визуальный вес */
 function traceShapePath(ctx, shape, cx, cy, r) {
     ctx.beginPath();
-    if (shape === 'stick' || shape === 'line' || shape === 'column' || shape === 'tower' || shape === 'rect') {
+    if (shape === 'stick') {
+        /** Палочка: скруглённый брусок с «древесными» торцами */
+        const w = r * 1.25;
+        const h = r * 1.95;
+        ctx.roundRect(cx - w / 2, cy - h / 2, w, h, w * 0.42);
+        ctx.closePath();
+        return;
+    }
+    if (shape === 'line') {
         /**
-         * Вытянутые объекты рисуются в полную клетку текстуры: пропорции задаёт
-         * не путь, а раздельное масштабирование по осям при отрисовке (scaleX/scaleY).
+         * Вертикальная полоса, а не горизонтальная: толщину задаёт scaleX,
+         * и у лежачей линии он менял бы длину — «толще» выглядело бы как «длиннее».
          */
+        const w = r * 0.95;
+        const h = r * 1.95;
+        ctx.rect(cx - w / 2, cy - h / 2, w, h);
+        ctx.closePath();
+        return;
+    }
+    if (shape === 'tower') {
+        /** Башня: корпус, зубцы наверху и основание — силуэт узнаваем без подписи */
+        const w = r * 1.22;
+        const h = r * 1.9;
+        const top = cy - h / 2;
+        const bot = cy + h / 2;
+        const merlon = w / 5;
+        ctx.moveTo(cx - w / 2, bot);
+        ctx.lineTo(cx - w / 2, top + merlon * 0.8);
+        /** Пять зубцов: вверх-вправо-вниз-вправо, как на крепостной стене */
+        for (let i = 0; i < 5; i++) {
+            const x0 = cx - w / 2 + i * merlon;
+            if (i % 2 === 0) {
+                ctx.lineTo(x0, top);
+                ctx.lineTo(x0 + merlon, top);
+            } else {
+                ctx.lineTo(x0, top + merlon * 0.8);
+                ctx.lineTo(x0 + merlon, top + merlon * 0.8);
+            }
+        }
+        ctx.lineTo(cx + w / 2, top + merlon * 0.8);
+        ctx.lineTo(cx + w / 2, bot);
+        ctx.closePath();
+        return;
+    }
+    if (shape === 'column') {
+        /** Столбик: ствол с расширенными базой и капителью */
+        const w = r * 0.86;
+        const h = r * 1.9;
+        const capH = h * 0.13;
+        const capW = w * 1.5;
+        const top = cy - h / 2;
+        const bot = cy + h / 2;
+        ctx.roundRect(cx - capW / 2, top, capW, capH, capH * 0.3);
+        ctx.roundRect(cx - w / 2, top + capH * 0.85, w, h - capH * 1.7, w * 0.12);
+        ctx.roundRect(cx - capW / 2, bot - capH, capW, capH, capH * 0.3);
+        return;
+    }
+    if (shape === 'rect') {
         const w = r * 1.5;
         const h = r * 1.9;
-        const round = shape === 'stick' || shape === 'line' ? Math.min(w, h) * 0.45 : Math.min(w, h) * 0.12;
-        ctx.roundRect(cx - w / 2, cy - h / 2, w, h, round);
+        ctx.roundRect(cx - w / 2, cy - h / 2, w, h, Math.min(w, h) * 0.1);
         ctx.closePath();
         return;
     }
@@ -2555,10 +2607,7 @@ function getOrCreateShapeTexture(shape, color) {
     traceShapePath(ctx, shape, cx, cy, r);
     ctx.fill();
 
-    ctx.strokeStyle = 'rgba(8,10,20,0.78)';
-    ctx.lineWidth = Math.max(6, size * 0.028);
-    traceShapePath(ctx, shape, cx, cy, r);
-    ctx.stroke();
+    /** Без тёмной обводки: она выглядела чужеродно и «утяжеляла» предметы */
 
     hit = { canvas: c, size };
     glyphTextureCache.set(versionedKey, hit);
@@ -2596,8 +2645,9 @@ function getOrCreateGlyphTexture(cacheKey, label, color) {
     ctx.restore();
     ctx.globalAlpha = 1;
 
-    ctx.strokeStyle = 'rgba(8,10,20,0.78)';
-    ctx.lineWidth = Math.max(6, size * 0.028);
+    /** Светлый контур вместо чёрного: отделяет букву от видео, не утяжеляя её */
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = Math.max(4, size * 0.016);
     ctx.strokeText(label, cx, cy);
 
     const grad = ctx.createLinearGradient(cx - fp * 0.38, cy - fp * 0.42, cx + fp * 0.34, cy + fp * 0.48);
@@ -4249,6 +4299,8 @@ async function start() {
  * «верный/неверный рез» без камеры и распознавания рук.
  */
 if (import.meta.env?.DEV) {
+    /** Стенд фигур: позволяет посмотреть все объекты в разных масштабах без запуска игры */
+    window.__shapeTex = (shape, color) => getOrCreateShapeTexture(shape, color);
     window.__compareDebug = {
         state: () => ({
             task: compareTask,

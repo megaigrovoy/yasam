@@ -3,16 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#0f0f13" />
+    <meta name="theme-color" content="#241733" />
     <!-- iOS Safari не поддерживает Fullscreen API на iPhone — для фуллскрина пользователю нужно «Добавить на экран Домой».
          Эти meta переводят PWA в standalone/fullscreen, когда игра запускается с домашнего экрана. -->
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="NeonNinja" />
+    <meta name="apple-mobile-web-app-title" content="Ya Sam" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="apple-touch-icon" href="/neoncat-icon.webp" />
-    <title>NeonNinjaCat</title>
+    <link rel="apple-touch-icon" href="/yasam-icon.webp" />
+    <link rel="icon" type="image/webp" href="/yasam-icon.webp" />
+    <title>Ya Sam</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <!-- Модели MediaPipe (.task) грузятся с этого origin во время init — TLS/HTTP заранее -->
@@ -125,7 +126,7 @@
           </div>
         </div>
         <div id="loading" class="visible">
-          <img src="/src/assets/neoncat.webp" alt="Neon Cat" id="loading-image" />
+          <img src="/src/assets/images/yasam.webp" alt="Yasam Games" id="loading-image" />
           <div id="loading-text"></div>
           <div id="progress-container">
             <div id="progress-bar"></div>
