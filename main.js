@@ -2311,9 +2311,19 @@ const COMPARE_SHAPES = ['circle', 'square', 'triangle', 'star'];
  * Озвучка thicker_pencil/thinner_pencil/thicker_rope/thinner_rope лежит на месте —
  * вернуть их сюда, когда появятся отдельные картинки толстой и тонкой версии.
  */
-const COMPARE_THICK_OBJECTS = [
-    { key: 'log', emoji: '🪵' },
-    { key: 'candle', emoji: '🕯️' }
+/** Эмодзи-объекты толщины кончились — всё перешло на нарисованные пары */
+const COMPARE_THICK_OBJECTS = [];
+/**
+ * Толщина на готовых спрайтах: две нарисованные версии вместо сжатия по X.
+ * Предмет участвует, только когда обе картинки лежат в проекте.
+ */
+const COMPARE_THICK_SPRITES = [
+    { key: 'candle', thick: 'candle_thick', thin: 'candle_thin' },
+    { key: 'pencil', thick: 'pencil_thick', thin: 'pencil_thin' },
+    { key: 'rope', thick: 'rope_thick', thin: 'rope_thin' },
+    { key: 'log', thick: 'log_thick', thin: 'log_thin' },
+    /** Линии занимают всю ширину кадра — разводим их дальше, иначе смыкаются */
+    { key: 'line', thick: 'line_thick', thin: 'line_thin', spread: 0.28 }
 ];
 /**
  * Длина: у каждого объекта два готовых спрайта — длинный и короткий.
@@ -2453,7 +2463,12 @@ function buildCompareRound() {
     const readyLongObjects = COMPARE_LONG_OBJECTS.filter(
         (o) => objectSpriteUrlByKey[o.long] && objectSpriteUrlByKey[o.short]
     );
-    const kinds = ['size', 'shape', 'thickness', 'height'];
+    /** Толщина полностью на спрайтах — без картинок этот тип не предлагаем */
+    const readyThickObjects = COMPARE_THICK_SPRITES.filter(
+        (o) => objectSpriteUrlByKey[o.thick] && objectSpriteUrlByKey[o.thin]
+    );
+    const kinds = ['size', 'shape', 'height'];
+    if (COMPARE_THICK_OBJECTS.length || readyThickObjects.length) kinds.push('thickness');
     if (readyLongObjects.length) kinds.push('length');
     const kind = pickAvoidingRecent(kinds, compareRecentTasks);
 
@@ -2482,10 +2497,33 @@ function buildCompareRound() {
 
     if (kind === 'thickness' || kind === 'height') {
         const isThick = kind === 'thickness';
-        const pool = isThick ? COMPARE_THICK_OBJECTS : COMPARE_TALL_OBJECTS;
-        /** Внутри своего типа: у толщины и высоты списки по 4, повтор был бы заметен */
+        /** У толщины спрайтовые пары идут наравне с эмодзи — выбор из общего списка */
+        const pool = isThick ? [...COMPARE_THICK_OBJECTS, ...readyThickObjects] : COMPARE_TALL_OBJECTS;
+        /** Внутри своего типа: списки короткие, повтор был бы заметен */
         const obj = pickAvoidingRecent(pool, compareRecentObjects.slice(-3), (o) => o.key);
         const askMore = Math.random() < 0.5;
+
+        /** Готовая пара картинок — масштабировать нечего, берём как есть */
+        if (obj.thick) {
+            const thickFirst = Math.random() < 0.5;
+            const objects = [
+                { id: idA, sprite: thickFirst ? obj.thick : obj.thin, spread: obj.spread },
+                { id: idB, sprite: thickFirst ? obj.thin : obj.thick, spread: obj.spread }
+            ];
+            const thickId = thickFirst ? idA : idB;
+            const thinId = thickFirst ? idB : idA;
+            rememberCompareRound('thickness', obj.key);
+            return {
+                objects,
+                task: {
+                    kind: 'thickness',
+                    taskKey: askMore ? 'thicker' : 'thinner',
+                    shape: obj.key,
+                    correctId: askMore ? thickId : thinId
+                }
+            };
+        }
+
         const wideFirst = Math.random() < 0.5;
         const base = obj.emoji ? { emoji: obj.emoji } : { shape: obj.shape };
 
@@ -2942,7 +2980,9 @@ class Fruit {
         this.compareId = spec.id;
         this.compareShape = spec.shape;
         /** Разнесены шире, чтобы не наезжать на игрока в центре кадра, но оба в поле зрения */
-        this.x = w * (spec.slot === 0 ? 0.3 : 0.7);
+        /** spread — насколько пара разведена от центра; широким объектам нужно больше */
+        const spread = spec.spread ?? 0.2;
+        this.x = w * (spec.slot === 0 ? 0.5 - spread : 0.5 + spread);
         this.y = h * 0.46;
         this.vx = 0;
         this.vy = 0;
