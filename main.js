@@ -246,6 +246,17 @@ const enTaskUrlByKey = Object.fromEntries(
     ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
 );
 
+/** Спрайты предметов сравнения — images/objects/pencil_long.webp и т. п. */
+const objectSpriteUrlByKey = Object.fromEntries(
+    Object.entries(
+        import.meta.glob('./src/assets/images/objects/*.{webp,png,WEBP,PNG}', {
+            eager: true,
+            query: '?url',
+            import: 'default'
+        })
+    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.[^.]+$/, '').toLowerCase(), href])
+);
+
 /** Задания на буквы и цифры — tasks/ru/letters/а.mp3, tasks/ru/numbers/3.mp3 */
 const ruLetterTaskUrlByKey = Object.fromEntries(
     Object.entries(
@@ -366,6 +377,14 @@ function playWordSound(word) {
 const TASK_SPEECH_FALLBACK = {
     ru: {
         /** Фоллбэк для новых объектов, пока нет записи — род согласован вручную */
+        longer_pencil: 'Разрежь длинный карандаш',
+        shorter_pencil: 'Разрежь короткий карандаш',
+        longer_rope: 'Разрежь длинную верёвку',
+        shorter_rope: 'Разрежь короткую верёвку',
+        longer_bolt: 'Разрежь длинный болт',
+        shorter_bolt: 'Разрежь короткий болт',
+        longer_sock: 'Разрежь длинный носок',
+        shorter_sock: 'Разрежь короткий носок',
         thicker_pencil: 'Разрежь толстый карандаш',
         thinner_pencil: 'Разрежь тонкий карандаш',
         thicker_rope: 'Разрежь толстую верёвку',
@@ -2180,6 +2199,35 @@ function getOrCreateEmojiTexture(emoji) {
     return hit;
 }
 
+/**
+ * Текстура из готового спрайта. Картинка грузится асинхронно, поэтому канвас
+ * отдаём сразу пустым и дорисовываем по onload — объект уже на экране и просто
+ * «проявляется», вместо того чтобы ждать загрузки перед спавном.
+ */
+const spriteTextureCache = new Map();
+function getOrCreateSpriteTexture(key) {
+    const url = objectSpriteUrlByKey[String(key).toLowerCase()];
+    if (!url) return null;
+    let hit = spriteTextureCache.get(key);
+    if (hit) return hit;
+    const size = 600;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    hit = { canvas: c, size };
+    spriteTextureCache.set(key, hit);
+    const im = new Image();
+    im.decoding = 'async';
+    im.onload = () => c.getContext('2d').drawImage(im, 0, 0, size, size);
+    im.src = url;
+    return hit;
+}
+
+/** Прогрев спрайтов, чтобы первый показ не был пустым */
+function preloadObjectSprites() {
+    for (const key of Object.keys(objectSpriteUrlByKey)) getOrCreateSpriteTexture(key);
+}
+
 function initFruitTextures() {
     const emojis = ['🍌', '🍎', '🍉', '🍊', '🍗', '🥩', '🥦', '🥬', '🍆', '🍅'];
     const size = 600; // max size matching largest fruit radius
@@ -2196,6 +2244,7 @@ function initFruitTextures() {
     }
 }
 initFruitTextures();
+preloadObjectSprites();
 
 /** Русский алфавит для уровней 4–6 (озвучка при вылете — sounds/letters/ru) */
 const CYRILLIC_LETTERS = [
@@ -2266,6 +2315,21 @@ const COMPARE_THICK_OBJECTS = [
     { key: 'log', emoji: '🪵' },
     { key: 'candle', emoji: '🕯️' }
 ];
+/**
+ * Длина: у каждого объекта два готовых спрайта — длинный и короткий.
+ * Растягивать один нельзя, поэтому пара задаётся картинками, а не масштабом.
+ */
+const COMPARE_LONG_OBJECTS = [
+    { key: 'pencil', long: 'pencil_long', short: 'pencil_short' },
+    { key: 'rope', long: 'rope_long', short: 'rope_short' },
+    { key: 'bolt', long: 'bolt_long', short: 'bolt_short' },
+    { key: 'sock', long: 'sock_long', short: 'sock_short' },
+    { key: 'stick', long: 'stick_long', short: 'stick_short' },
+    { key: 'rect', long: 'rect_long', short: 'rect_short' }
+];
+/** Спрайты нарисованы с полями внутри кадра — компенсируем, иначе смотрятся мелко */
+const COMPARE_SPRITE_SCALE = 1.2;
+
 const COMPARE_TALL_OBJECTS = [
     { key: 'tower', emoji: '🗼' },
     { key: 'tree', emoji: '🌲' },
@@ -2385,7 +2449,36 @@ function buildCompareRound() {
      * Объединённое сравнение: размер, форма, толщина и высота идут вперемешку.
      * Тип задания выбирается с учётом недавних, чтобы подряд не шло одно и то же.
      */
-    const kind = pickAvoidingRecent(['size', 'shape', 'thickness', 'height'], compareRecentTasks);
+    /** В длину идут только объекты, у которых обе картинки реально лежат в проекте */
+    const readyLongObjects = COMPARE_LONG_OBJECTS.filter(
+        (o) => objectSpriteUrlByKey[o.long] && objectSpriteUrlByKey[o.short]
+    );
+    const kinds = ['size', 'shape', 'thickness', 'height'];
+    if (readyLongObjects.length) kinds.push('length');
+    const kind = pickAvoidingRecent(kinds, compareRecentTasks);
+
+    if (kind === 'length') {
+        const obj = pickAvoidingRecent(readyLongObjects, compareRecentObjects.slice(-3), (o) => o.key);
+        const askLonger = Math.random() < 0.5;
+        const longFirst = Math.random() < 0.5;
+        /** Спрайты пары уже нарисованы в общем масштабе — своё масштабирование не нужно */
+        const objects = [
+            { id: idA, sprite: longFirst ? obj.long : obj.short },
+            { id: idB, sprite: longFirst ? obj.short : obj.long }
+        ];
+        const longId = longFirst ? idA : idB;
+        const shortId = longFirst ? idB : idA;
+        rememberCompareRound('length', obj.key);
+        return {
+            objects,
+            task: {
+                kind: 'length',
+                taskKey: askLonger ? 'longer' : 'shorter',
+                shape: obj.key,
+                correctId: askLonger ? longId : shortId
+            }
+        };
+    }
 
     if (kind === 'thickness' || kind === 'height') {
         const isThick = kind === 'thickness';
@@ -2871,7 +2964,12 @@ class Fruit {
         }
         this.emoji = null;
         this.color = spec.color || GLYPH_NEON_COLORS[Math.floor(Math.random() * GLYPH_NEON_COLORS.length)];
-        if (spec.emoji) {
+        if (spec.sprite) {
+            /** Готовая картинка: зеркало не компенсируем, как и у эмодзи */
+            this.emoji = spec.sprite;
+            this.textureRef = getOrCreateSpriteTexture(spec.sprite);
+            this.radius *= COMPARE_SPRITE_SCALE;
+        } else if (spec.emoji) {
             this.emoji = spec.emoji;
             this.textureRef = getOrCreateEmojiTexture(spec.emoji);
         } else if (spec.glyph) {
