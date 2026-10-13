@@ -377,42 +377,42 @@ function playWordSound(word) {
 const TASK_SPEECH_FALLBACK = {
     ru: {
         /** Фоллбэк для новых объектов, пока нет записи — род согласован вручную */
-        longer_pencil: 'Разрежь длинный карандаш',
-        shorter_pencil: 'Разрежь короткий карандаш',
-        longer_rope: 'Разрежь длинную верёвку',
-        shorter_rope: 'Разрежь короткую верёвку',
-        longer_bolt: 'Разрежь длинный болт',
-        shorter_bolt: 'Разрежь короткий болт',
-        longer_sock: 'Разрежь длинный носок',
-        shorter_sock: 'Разрежь короткий носок',
-        thicker_pencil: 'Разрежь толстый карандаш',
-        thinner_pencil: 'Разрежь тонкий карандаш',
-        thicker_rope: 'Разрежь толстую верёвку',
-        thinner_rope: 'Разрежь тонкую верёвку',
-        thicker_log: 'Разрежь толстое бревно',
-        thinner_log: 'Разрежь тонкое бревно',
-        thicker_candle: 'Разрежь толстую свечу',
-        thinner_candle: 'Разрежь тонкую свечу',
-        taller_tree: 'Разрежь высокую ёлку',
-        lower_tree: 'Разрежь низкую ёлку',
-        taller_house: 'Разрежь высокий дом',
-        lower_house: 'Разрежь низкий дом',
-        taller_castle: 'Разрежь высокий замок',
-        lower_castle: 'Разрежь низкий замок',
-        bigger: 'Разрежь большой',
-        smaller: 'Разрежь маленький',
-        circle: 'Разрежь круг',
-        square: 'Разрежь квадрат',
-        triangle: 'Разрежь треугольник',
-        star: 'Разрежь звезду'
+        longer_pencil: 'Покажи длинный карандаш',
+        shorter_pencil: 'Покажи короткий карандаш',
+        longer_rope: 'Покажи длинную верёвку',
+        shorter_rope: 'Покажи короткую верёвку',
+        longer_bolt: 'Покажи длинный болт',
+        shorter_bolt: 'Покажи короткий болт',
+        longer_sock: 'Покажи длинный носок',
+        shorter_sock: 'Покажи короткий носок',
+        thicker_pencil: 'Покажи толстый карандаш',
+        thinner_pencil: 'Покажи тонкий карандаш',
+        thicker_rope: 'Покажи толстую верёвку',
+        thinner_rope: 'Покажи тонкую верёвку',
+        thicker_log: 'Покажи толстое бревно',
+        thinner_log: 'Покажи тонкое бревно',
+        thicker_candle: 'Покажи толстую свечу',
+        thinner_candle: 'Покажи тонкую свечу',
+        taller_tree: 'Покажи высокую ёлку',
+        lower_tree: 'Покажи низкую ёлку',
+        taller_house: 'Покажи высокий дом',
+        lower_house: 'Покажи низкий дом',
+        taller_castle: 'Покажи высокий замок',
+        lower_castle: 'Покажи низкий замок',
+        bigger: 'Покажи большой',
+        smaller: 'Покажи маленький',
+        circle: 'Покажи круг',
+        square: 'Покажи квадрат',
+        triangle: 'Покажи треугольник',
+        star: 'Покажи звезду'
     },
     en: {
-        bigger: 'Cut the big one',
-        smaller: 'Cut the small one',
-        circle: 'Cut the circle',
-        square: 'Cut the square',
-        triangle: 'Cut the triangle',
-        star: 'Cut the star'
+        bigger: 'Show the big one',
+        smaller: 'Show the small one',
+        circle: 'Show the circle',
+        square: 'Show the square',
+        triangle: 'Show the triangle',
+        star: 'Show the star'
     }
 };
 
@@ -1255,16 +1255,53 @@ function checkLevelGoal() {
 }
 
 /**
+ * Копит прогресс удержания руки на объекте. Когда рука уходит, прогресс спадает,
+ * а не обнуляется: кратковременная потеря трекинга не должна отнимать результат.
+ */
+function updateHoldProgress(fruit, tipPoints, dt) {
+    if (fruit.isSliced || levelComplete || compareRoundResolved) return;
+
+    const reach = fruit.radius + HOLD_RADIUS_BONUS_PX;
+    let touching = false;
+    for (const p of tipPoints) {
+        if (Math.hypot(p.x - fruit.x, p.y - fruit.y) <= reach) {
+            touching = true;
+            break;
+        }
+    }
+
+    /** dt нормализован к 60 fps, переводим в миллисекунды */
+    const elapsedMs = dt * (1000 / 60);
+    /** После ошибки ждём, пока ребёнок уберёт руку — только тогда снова копим */
+    if (fruit.holdLocked) {
+        if (!touching) fruit.holdLocked = false;
+        fruit.holdProgress = Math.max(0, fruit.holdProgress - elapsedMs / HOLD_DECAY_MS);
+        return;
+    }
+    if (touching) {
+        fruit.holdProgress = Math.min(1, fruit.holdProgress + elapsedMs / HOLD_TO_SELECT_MS);
+        if (fruit.holdProgress >= 1) {
+            fruit.holdProgress = 0;
+            handleCompareCut(fruit, null);
+        }
+    } else {
+        fruit.holdProgress = Math.max(0, fruit.holdProgress - elapsedMs / HOLD_DECAY_MS);
+    }
+}
+
+/**
  * Рез в режиме сравнения. Неверный объект не разрезается — только сигнал ошибки,
  * задание остаётся в силе, чтобы ребёнок попробовал ещё раз.
  */
-function handleCompareCut(fruit) {
+function handleCompareCut(fruit, hitSegment) {
     if (!compareTask || compareRoundResolved) return;
 
     if (!fruit.isCompareCorrect) {
         compareErrorStreak += 1;
         fruit.hitFlash = 0;
         fruit.errorFlash = 1;
+        /** Блокируем накопление, пока рука не ушла: иначе счёт пойдёт сразу заново */
+        fruit.holdLocked = true;
         playErrorSound();
         if (compareErrorStreak >= COMPARE_HINT_AFTER_ERRORS && !compareHintActive) {
             compareHintActive = true;
@@ -1278,7 +1315,7 @@ function handleCompareCut(fruit) {
 
     compareRoundResolved = true;
     fruit.isSliced = true;
-    fruit.cutAngle = fruit.rotation;
+    fruit.cutAngle = sliceAngleFromSwipe(fruit, hitSegment);
     fruit.rot1 = fruit.rotation;
     fruit.rot2 = fruit.rotation;
     fruit.rotSpeed1 = -0.05;
@@ -1516,7 +1553,7 @@ const I18N = {
         hudGoal: 'Цель',
         scorePrefix: 'Счёт: ',
         menuHeading: 'Выберите тип игры',
-        menuHint: 'Слушай задание и разрезай нужный предмет.',
+        menuHint: 'Слушай задание и наведи руку на нужный предмет.',
         quickSettingsAria: 'Язык, звук, музыка и число игроков',
         langLabel: 'Язык',
         playersOnCamera: 'Количество игроков',
@@ -1571,7 +1608,7 @@ const I18N = {
         hudGoal: 'Goal',
         scorePrefix: 'Score: ',
         menuHeading: 'Choose game type',
-        menuHint: 'Listen to the task and cut the right object.',
+        menuHint: 'Listen to the task and hold your hand over the right object.',
         quickSettingsAria: 'Language, sound, music and number of players',
         langLabel: 'Language',
         playersOnCamera: 'Number of players',
@@ -2369,6 +2406,17 @@ const COMPARE_ITEMS = [
 /** Контраст размеров фиксированный, не случайный — различие должно читаться однозначно */
 const COMPARE_SIZE_BIG = 1.0;
 const COMPARE_SIZE_SMALL = 0.5;
+/**
+ * Выбор удержанием вместо разрезания: ребёнок подносит руку к объекту и держит.
+ * Медленное осознанное движение вместо взмаха — и случайный пронос руки
+ * над предметом ничего не выбирает.
+ */
+const HOLD_TO_SELECT_MS = 1000;
+/** Пока рука ушла, прогресс спадает плавно — короткий срыв трекинга не сбрасывает всё */
+const HOLD_DECAY_MS = 700;
+/** Запас к радиусу объекта: попасть точно в центр трудно, особенно мелкому объекту */
+const HOLD_RADIUS_BONUS_PX = 46;
+
 /** После стольких ошибок подряд — подсветка нужного объекта и повтор задания */
 const COMPARE_HINT_AFTER_ERRORS = 5;
 /** Пауза перед следующей парой, чтобы ребёнок увидел награду */
@@ -3028,6 +3076,10 @@ class Fruit {
         this.hintPulse = 0;
         /** Красная вспышка при неверном выборе: 1 → 0, затухает за ~0.5 с */
         this.errorFlash = 0;
+        /** Прогресс удержания руки на объекте: 0 → 1, при 1 выбор засчитан */
+        this.holdProgress = 0;
+        /** После ошибки накопление заблокировано, пока рука не уйдёт с объекта */
+        this.holdLocked = false;
 
         this.rotation = 0;
         this.rotationSpeed = 0;
@@ -3036,6 +3088,53 @@ class Fruit {
         this.rot2 = 0;
         this.rotSpeed1 = 0;
         this.rotSpeed2 = 0;
+    }
+
+    /**
+     * Кольцо прогресса удержания. Рисуется отдельным проходом, вне draw(),
+     * потому что там действуют поворот объекта и компенсация зеркала —
+     * кольцо от них бы перекосилось и поехало.
+     */
+    drawHoldRing(ctx) {
+        if (!this.isCompareObject || this.isSliced || this.holdProgress <= 0.01) return;
+        /** Кольцо шире самого объекта — иначе оно липнет к картинке и мешает её рассмотреть */
+        const r = this.radius + HOLD_RADIUS_BONUS_PX * 0.9;
+        const p = this.holdProgress;
+
+        ctx.save();
+        ctx.translate(this.x, this.y);
+
+        /** Тёмная подложка — кольцо должно читаться на любом фоне камеры */
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(8, 12, 22, 0.55)';
+        ctx.lineWidth = 14;
+        ctx.stroke();
+
+        /**
+         * Радуга вдоль дуги. Canvas не умеет градиент по окружности, поэтому
+         * рисуем короткими сегментами с нахлёстом — стыков не видно.
+         */
+        const start = -Math.PI / 2;
+        const total = p * Math.PI * 2;
+        const steps = Math.max(8, Math.round(p * 56));
+        const stepAng = total / steps;
+        ctx.lineCap = 'round';
+        ctx.lineWidth = 11;
+        ctx.shadowBlur = 16;
+        for (let i = 0; i < steps; i++) {
+            /** Оттенок берём по доле всей дуги: радуга целиком укладывается в заполненную часть */
+            const hue = (i / steps) * 300;
+            const color = `hsl(${hue}, 92%, 62%)`;
+            ctx.beginPath();
+            /** Нахлёст в полсегмента — иначе на стыках просвечивает подложка */
+            const to = Math.min(start + total, start + (i + 1.5) * stepAng);
+            ctx.arc(0, 0, r, start + i * stepAng, to);
+            ctx.strokeStyle = color;
+            ctx.shadowColor = color;
+            ctx.stroke();
+        }
+        ctx.restore();
     }
 
     /** Нужный объект в текущем задании — для подсветки и проверки реза */
@@ -3166,7 +3265,6 @@ const BOARD_ZONE_Y = {
 };
 /** Лодыжки и носки обеих ног (BlazePose): сегменты удара ногой строятся по этим точкам */
 const FOOT_STRIKE_INDICES = [27, 28, 31, 32];
-const FOOT_GLOW_INDICES = [31, 32];
 
 const BOARD_BREAK_SFX = [sliceSoundUrlByEmoji['🍗'], sliceSoundUrlByEmoji['🥩']].filter(Boolean);
 let boardBreakSfxRot = 0;
@@ -3358,22 +3456,6 @@ function boardSegmentsHitBoard(segments, board) {
     return false;
 }
 
-/** Неоновая подсветка ступни — показывает ребёнку, что ногой тоже можно бить */
-function drawFootGlow(ctx, pt) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 13, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0, 243, 255, 0.35)';
-    ctx.shadowColor = '#00f3ff';
-    ctx.shadowBlur = 18;
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-    ctx.fill();
-    ctx.restore();
-}
-
 /** Radial “splash” at slice: rays + ring, decays quickly */
 class SliceBurst {
     constructor(x, y, color) {
@@ -3497,9 +3579,6 @@ class Particle {
     }
 }
 
-/** DIP joint used as “base” to aim claw along the finger (toward tip) */
-const TIP_CLAW_BASE = { 8: 7, 20: 19 };
-
 // Intersect a line segment and a circle
 function lineCircleCollide(a, b, circle) {
     const abx = b.x - a.x;
@@ -3525,51 +3604,6 @@ function lineCircleCollide(a, b, circle) {
     
     const distanceSq = (closest.x - circle.x) * (closest.x - circle.x) + (closest.y - circle.y) * (closest.y - circle.y);
     return distanceSq < (circle.radius * circle.radius);
-}
-
-/** Three white claw prongs at the tip, pointing along the finger.
- *  handSpanPx — экранная длина «руки» (запястье→кончик), чтобы когти росли вместе с кистью. */
-function drawFingertipClaw(ctx, tip, proximal, handSpanPx) {
-    let dx = tip.x - proximal.x;
-    let dy = tip.y - proximal.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 6) {
-        dx = 1;
-        dy = 0;
-    } else {
-        dx /= len;
-        dy /= len;
-    }
-    const baseAng = Math.atan2(dy, dx);
-    /** База ~120 px ≈ обычная рука перед камерой; clamp, чтобы на близком/далёком плане не уезжало в крайности */
-    const scale = Math.max(0.7, Math.min(3.5, (handSpanPx || 120) / 120));
-    ctx.save();
-    ctx.translate(tip.x, tip.y);
-    ctx.rotate(baseAng);
-    ctx.fillStyle = '#f4f6ff';
-    ctx.strokeStyle = 'rgba(200, 215, 255, 0.92)';
-    ctx.lineWidth = 1.4 * scale;
-    ctx.shadowColor = 'rgba(0, 243, 255, 0.6)';
-    ctx.shadowBlur = 9 * scale;
-    const prongs = [
-        { rot: -0.34, reach: 28 * scale, half: 6.5 * scale },
-        { rot: 0,     reach: 38 * scale, half: 8.0 * scale },
-        { rot: 0.34,  reach: 28 * scale, half: 6.5 * scale }
-    ];
-    for (const p of prongs) {
-        ctx.save();
-        ctx.rotate(p.rot);
-        ctx.beginPath();
-        ctx.moveTo(0, -p.half);
-        ctx.lineTo(p.reach, 0);
-        ctx.lineTo(0, p.half);
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-    }
-    ctx.shadowBlur = 0;
-    ctx.restore();
 }
 
 /**
@@ -3919,6 +3953,25 @@ const GHOST_VELOCITY_DAMP = 0.86;
  * Append many short segments along [a→b] so lineCircleCollide cannot miss wide bodies
  * when the tip moves a large distance in one frame.
  */
+/**
+ * Угол, под которым разъезжаются половинки. Берём направление взмаха и
+ * поворачиваем на 90°: половинки расходятся поперёк линии реза, а не вдоль неё.
+ * Без сегмента (например, программный рез) падаем на угол самого предмета.
+ */
+function sliceAngleFromSwipe(fruit, segment) {
+    if (!segment) return fruit.rotation;
+    const dx = segment.b.x - segment.a.x;
+    const dy = segment.b.y - segment.a.y;
+    if (Math.hypot(dx, dy) < 1) return fruit.rotation;
+    /**
+     * draw() компенсирует CSS-зеркало для текста и фигур через scale(-1,1) —
+     * в такой системе координат X направлен в другую сторону, отражаем угол.
+     */
+    const mirrored = fruit.levelMode !== 'fruit' && !fruit.emoji;
+    const swipe = Math.atan2(dy, mirrored ? -dx : dx);
+    return swipe + Math.PI / 2;
+}
+
 function appendSweepCollisionSegments(segments, a, b, maxStepPx = COLLISION_SUBSTEP_PX) {
     const dx = b.x - a.x;
     const dy = b.y - a.y;
@@ -4048,6 +4101,10 @@ function gameLoop(nowTime) {
 
     // Prepare line segments for collision detection
     const handSegments = [];
+    /** Позиции кончиков пальцев в этом кадре — для режима «поднеси и удержи» */
+    const handTipPoints = [];
+    /** Виртуальный палец для автотестов — камера в них не даёт рук */
+    if (import.meta.env?.DEV && window.__holdProbe) handTipPoints.push(window.__holdProbe);
     /** Режим «Доски»: сегменты ударов рук и ног отдельно — доска ломается только «своей» частью тела */
     const boardHandStrikeSegments = levelCfg.mode === 'board' ? [] : null;
     const boardFootStrikeSegments = levelCfg.mode === 'board' ? [] : null;
@@ -4151,6 +4208,8 @@ function gameLoop(nowTime) {
         }
         for (const tipIdx of activeTipIndices) {
             const tip = getScreenPoint(landmarks[tipIdx]);
+            /** Текущие позиции кончиков — для механики удержания (в отличие от путей для реза) */
+            handTipPoints.push(tip);
             if (prev[tipIdx]) {
                 appendSweepCollisionSegments(handSegments, prev[tipIdx], tip);
                 const jx = tip.x - prev[tipIdx].x;
@@ -4217,25 +4276,6 @@ function gameLoop(nowTime) {
                 }
                 prevFootPointByKey.set(footKey, pt);
             }
-            for (const idx of FOOT_GLOW_INDICES) {
-                const p = lm[idx];
-                if (!p || (p.visibility !== undefined && p.visibility < 0.5)) continue;
-                drawFootGlow(canvasCtx, getScreenPoint(p));
-            }
-        }
-    }
-
-    // Draw Hands (same order as keyedHands)
-    if (keyedHands.length > 0) {
-        for (const { landmarks } of keyedHands) {
-            const wristScreen = getScreenPoint(landmarks[0]);
-            activeTipIndices.forEach((tipIndex) => {
-                const tip = getScreenPoint(landmarks[tipIndex]);
-                const baseIdx = TIP_CLAW_BASE[tipIndex];
-                const proximal = getScreenPoint(landmarks[baseIdx]);
-                const handSpanPx = Math.hypot(tip.x - wristScreen.x, tip.y - wristScreen.y);
-                drawFingertipClaw(canvasCtx, tip, proximal, handSpanPx);
-            });
         }
     }
 
@@ -4297,13 +4337,17 @@ function gameLoop(nowTime) {
         let fruit = fruits[i];
         fruit.update(dt);
         fruit.draw(canvasCtx);
+        fruit.drawHoldRing(canvasCtx);
 
         // Рез: путь кончиков пересёк круг предмета (любой сегмент), но засчёт — на «входе» в контакт, не каждый кадр
         if (!fruit.isSliced) {
             let pathIntersectsFruit = false;
+            /** Запоминаем сегмент взмаха — по нему выставим угол разреза */
+            let hitSegment = null;
             for (const seg of handSegments) {
                 if (lineCircleCollide(seg.a, seg.b, fruit)) {
                     pathIntersectsFruit = true;
+                    hitSegment = seg;
                     break;
                 }
             }
@@ -4320,14 +4364,15 @@ function gameLoop(nowTime) {
                 fruit._wasTouchingHand = true;
             }
 
-            if (cutStroke && fruit.isCompareObject) {
-                handleCompareCut(fruit);
+            if (fruit.isCompareObject) {
+                /** Выбор удержанием: взмах здесь ничего не решает, важна задержка руки */
+                updateHoldProgress(fruit, handTipPoints, dt);
                 continue;
             }
 
             if (cutStroke) {
                 fruit.isSliced = true;
-                fruit.cutAngle = fruit.rotation;
+                fruit.cutAngle = sliceAngleFromSwipe(fruit, hitSegment);
                 fruit.rot1 = fruit.rotation;
                 fruit.rot2 = fruit.rotation;
                 if (fruit.levelMode === 'fruit') {
@@ -4479,7 +4524,10 @@ if (import.meta.env?.DEV) {
                 x: Math.round(f.x),
                 correct: f.isCompareCorrect,
                 sliced: f.isSliced,
-                errorFlash: Number((f.errorFlash || 0).toFixed(2))
+                errorFlash: Number((f.errorFlash || 0).toFixed(2)),
+                holdProgress: Number((f.holdProgress || 0).toFixed(2)),
+                x: Math.round(f.x),
+                y: Math.round(f.y)
             }))
         }),
         /** Имитирует рез объекта рукой */

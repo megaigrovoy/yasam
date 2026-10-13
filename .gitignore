@@ -3,3 +3,11 @@ dist/
 public/mediapipe-wasm/
 .DS_Store
 *.local
+
+# Исходные рабочие тетради — источник заданий, в сборку не идут (~100 МБ)
+books/
+
+# Ключи API — никогда не коммитим
+.env
+.env.*
+!.env.example
