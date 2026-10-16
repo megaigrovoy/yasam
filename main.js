@@ -269,6 +269,13 @@ const ruNumberTaskUrlByKey = Object.fromEntries(
     ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
 );
 
+/** Режим счёта — tasks/ru/counting: intro_<вид>, count_1..10 (счёт вслух), total_1..10 (итог) */
+const ruCountingUrlByKey = Object.fromEntries(
+    Object.entries(
+        import.meta.glob('./src/assets/sounds/tasks/ru/counting/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
+    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
+);
+
 /** Обратная связь — sounds/feedback/ru|en: error.mp3 + praise_1..N.mp3 (случайная похвала) */
 const ruFeedbackUrlByKey = Object.fromEntries(
     Object.entries(
@@ -454,6 +461,13 @@ function playTaskSound(taskKey, objectKey, taskKind) {
     const fb = TASK_SPEECH_FALLBACK[uiLang] || TASK_SPEECH_FALLBACK.ru;
     /** Сначала фраза под конкретный объект, иначе общая — род может не совпасть, но смысл сохранится */
     speakFallback((objectKey && fb[`${key}_${String(objectKey).toLowerCase()}`]) || fb[taskKey]);
+}
+
+/** Озвучка режима счёта: intro_<вид>, count_N, total_N */
+function playCountingSound(key) {
+    if (!soundEffectsEnabled || !key) return;
+    const url = ruCountingUrlByKey[String(key).toLowerCase()];
+    if (url) playOneShotSfx(url, 1.0);
 }
 
 /** Мягкий сигнал ошибки — не должен пугать ребёнка */
@@ -1258,20 +1272,60 @@ function checkLevelGoal() {
  * Копит прогресс удержания руки на объекте. Когда рука уходит, прогресс спадает,
  * а не обнуляется: кратковременная потеря трекинга не должна отнимать результат.
  */
-function updateHoldProgress(fruit, tipPoints, dt) {
-    if (fruit.isSliced || levelComplete || compareRoundResolved) return;
+/** Рука, закреплённая за текущим пересчётом: считать можно только одной */
+let countingHand = null;
 
-    const reach = fruit.radius + HOLD_RADIUS_BONUS_PX;
-    let touching = false;
-    for (const p of tipPoints) {
-        if (Math.hypot(p.x - fruit.x, p.y - fruit.y) <= reach) {
-            touching = true;
-            break;
+/**
+ * Какой ровно один предмет сейчас удерживается. Выбираем ближайший к пальцу,
+ * а не все попавшие в радиус: иначе одна рука между двумя котиками копит
+ * прогресс обоим и засчитывает лишнее.
+ *
+ * В счёте обе руки равноправны, но работает только одна за раз: рука, которая
+ * уже держит котика, «занята», и вторая ждёт. Как только этот котик досчитан
+ * или рука ушла с него, обе руки снова свободны — считать может любая.
+ */
+function pickHeldFruit(list, tipPoints, mode) {
+    if (!tipPoints.length) {
+        if (mode === "counting") countingHand = null;
+        return null;
+    }
+
+    /** Для каждой руки — ближайший несосчитанный предмет в зоне досягаемости */
+    const byHand = new Map();
+    for (const f of list) {
+        if (f.isSliced || !f.isCompareObject) continue;
+        if (f.isCountingObject && f.countNumber > 0) continue;
+        const reach = f.radius + HOLD_RADIUS_BONUS_PX;
+        for (const p of tipPoints) {
+            const d = Math.hypot(p.x - f.x, p.y - f.y);
+            if (d > reach) continue;
+            const cur = byHand.get(p.hand);
+            if (!cur || d < cur.dist) byHand.set(p.hand, { fruit: f, dist: d });
         }
     }
 
-    /** dt нормализован к 60 fps, переводим в миллисекунды */
-    const elapsedMs = dt * (1000 / 60);
+    if (mode === "counting") {
+        /** Занятая рука продолжает держать своего котика — вторая в это время не активна */
+        const own = countingHand && byHand.get(countingHand);
+        if (own) return own.fruit;
+        /** Рука освободилась (досчитала или ушла) — снова выбираем из обеих */
+        countingHand = null;
+    }
+
+    let best = null;
+    for (const [hand, cand] of byHand) {
+        if (!best || cand.dist < best.dist) best = { ...cand, hand };
+    }
+    if (!best) return null;
+    if (mode === "counting") countingHand = best.hand;
+    return best.fruit;
+}
+
+function updateHoldProgress(fruit, touching, elapsedMs) {
+    if (fruit.isSliced || levelComplete) return;
+    /** Сосчитанный предмет больше не реагирует — иначе один и тот же считался бы дважды */
+    if (fruit.isCountingObject ? fruit.countNumber > 0 : compareRoundResolved) return;
+
     /** После ошибки ждём, пока ребёнок уберёт руку — только тогда снова копим */
     if (fruit.holdLocked) {
         if (!touching) fruit.holdLocked = false;
@@ -1282,10 +1336,41 @@ function updateHoldProgress(fruit, tipPoints, dt) {
         fruit.holdProgress = Math.min(1, fruit.holdProgress + elapsedMs / HOLD_TO_SELECT_MS);
         if (fruit.holdProgress >= 1) {
             fruit.holdProgress = 0;
-            handleCompareCut(fruit, null);
+            if (fruit.isCountingObject) handleCountingHold(fruit);
+            else handleCompareCut(fruit, null);
         }
     } else {
         fruit.holdProgress = Math.max(0, fruit.holdProgress - elapsedMs / HOLD_DECAY_MS);
+    }
+}
+
+/**
+ * Предмет сосчитан. В счёте нет «неверного» выбора — есть только
+ * незавершённость, поэтому ошибок здесь не бывает, только номер и голос.
+ */
+function handleCountingHold(fruit) {
+    if (fruit.countNumber > 0 || countingFinishedAt) return;
+
+    countingDone += 1;
+    fruit.countNumber = countingDone;
+    fruit.countPop = 1;
+    fruit.countAnimMs = 0;
+    spawnCountHearts(fruit.x, fruit.y, fruit.radius);
+    playCountingSound(`count_${countingDone}`);
+    juiceBurst(fruit.x, fruit.y, '#7CFFB2', 16, 10);
+    registerGoodHit(fruit, 5);
+
+    if (countingDone >= countingTotal) {
+        countingFinishedAt = Date.now();
+        countingRounds += 1;
+        /** Итог — с паузой, чтобы не наложиться на последнее числительное */
+        const kindKey = countingKind.key;
+        setTimeout(() => playCountingSound(`total_${kindKey}_${countingTotal}`), COUNTING_TOTAL_DELAY_MS);
+        const cfg = getCurrentLevelConfig();
+        if (!levelComplete && cfg.roundGoal && countingRounds >= cfg.roundGoal) {
+            /** Даём дослушать итог, прежде чем показывать экран победы */
+            setTimeout(completeLevel, COUNTING_TOTAL_DELAY_MS + 1400);
+        }
     }
 }
 
@@ -1314,12 +1399,13 @@ function handleCompareCut(fruit, hitSegment) {
     }
 
     compareRoundResolved = true;
-    fruit.isSliced = true;
-    fruit.cutAngle = sliceAngleFromSwipe(fruit, hitSegment);
-    fruit.rot1 = fruit.rotation;
-    fruit.rot2 = fruit.rotation;
-    fruit.rotSpeed1 = -0.05;
-    fruit.rotSpeed2 = 0.05;
+    /**
+     * Радостный прыжок вместо разрезания — как у котиков в счёте. Ребёнок
+     * не «уничтожает» правильный ответ, а предмет радуется вместе с ним.
+     */
+    fruit.celebrating = true;
+    fruit.countAnimMs = 0;
+    spawnCountHearts(fruit.x, fruit.y, fruit.radius);
 
     /** Эффект награды: «сок» + вспышка; combo-текст добавит registerGoodHit */
     juiceBurst(fruit.x, fruit.y, fruit.color, 34, 20);
@@ -1484,6 +1570,8 @@ const LEVELS = [
     { mode: 'compare', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'compareNumber', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
     { mode: 'compareLetter', maxConcurrent: 2, spawnIntervalMs: 0, goal: 10 },
+    /** Счёт: цель в раундах, а не в предметах — иначе уровень кончится посреди пересчёта */
+    { mode: 'counting', maxConcurrent: 10, spawnIntervalMs: 0, goal: 0, roundGoal: 4 },
     { mode: 'board', maxConcurrent: 1, spawnIntervalMs: 1100, goal: 20 },
     { mode: 'board', maxConcurrent: 2, spawnIntervalMs: 950, goal: 30 },
     { mode: 'board', maxConcurrent: 3, spawnIntervalMs: 800, goal: 40 }
@@ -1499,7 +1587,7 @@ let selectedGameMode = 'fruit';
  * Режимы, показанные в меню. Остальные уровни остаются в LEVELS и работают —
  * просто не выведены в меню. Чтобы вернуть: дописать сюда 'fruit', 'number', 'word', 'board'.
  */
-const MENU_GAME_MODES = ['compareNumber', 'compareLetter', 'compare'];
+const MENU_GAME_MODES = ['compareNumber', 'compareLetter', 'compare', 'counting'];
 
 function levelIndicesForMode(mode) {
     const out = [];
@@ -1536,6 +1624,7 @@ const I18N = {
         tierCompare: 'Сравнение',
         tierCompareLetters: 'Буквы',
         tierCompareNumbers: 'Цифры',
+        tierCounting: 'Сосчитай',
         hudAtOnce: '',
         comboLabel: 'Серия',
         comboMax: 'Макс. серия',
@@ -1591,6 +1680,7 @@ const I18N = {
         tierCompare: 'Compare',
         tierCompareLetters: 'Letters',
         tierCompareNumbers: 'Numbers',
+        tierCounting: 'Counting',
         hudAtOnce: 'at once',
         comboLabel: 'Combo',
         comboMax: 'Best combo',
@@ -1679,6 +1769,8 @@ function levelTierTitle(levelIndex) {
             ? t('tierCompareLetters')
             : cfg.mode === 'compareNumber'
             ? t('tierCompareNumbers')
+            : cfg.mode === 'counting'
+            ? t('tierCounting')
             : t('tierWords');
     return `${name} ${sub}`;
 }
@@ -1686,7 +1778,8 @@ function levelTierTitle(levelIndex) {
 function formatHudLevelLine(levelIndex, maxConcurrent) {
     const title = levelTierTitle(levelIndex);
     const cfg = LEVELS[levelIndex];
-    if (cfg?.mode === 'word' || cfg?.mode === 'board') return title;
+    /** В счёте число предметов меняется каждый раунд — «одновременно N» только путает */
+    if (cfg?.mode === 'word' || cfg?.mode === 'board' || cfg?.mode === 'counting') return title;
     if (uiLang === 'en') {
         return `${title} · ${pluralSimultaneousEn(maxConcurrent)} ${t('hudAtOnce')}`.trim();
     }
@@ -1817,6 +1910,7 @@ function startLevel(levelIndex) {
     }
     if (cfg.mode === 'board') nextBoardStrikeKind = 'hand';
     resetCompareState();
+    resetCountingState();
     lastSpawnTime = Date.now();
     lastFrameTime = performance.now();
     resetPoseDisplayState();
@@ -2329,7 +2423,8 @@ function isCompareMode(mode) {
     return (
         mode === 'compare' ||
         mode === 'compareLetter' ||
-        mode === 'compareNumber'
+        mode === 'compareNumber' ||
+        mode === 'counting'
     );
 }
 
@@ -2383,6 +2478,182 @@ const COMPARE_TALL_OBJECTS = [
     { key: 'house', emoji: '🏢' },
     { key: 'castle', emoji: '🏰' }
 ];
+/* ─── Режим счёта ───────────────────────────────────────────────────────────
+ * На экране одинаковые предметы; ребёнок задерживает руку на каждом,
+ * голос считает вслух. Посчитанный помечается, повторно не считается.
+ */
+
+/** Что считаем. Ключ совпадает с именем файла озвучки: intro_<key> */
+const COUNTING_KINDS = [
+    { key: 'cat', emoji: '🐱' },
+    { key: 'dog', emoji: '🐶' },
+    { key: 'rabbit', emoji: '🐰' },
+    { key: 'bear', emoji: '🐻' },
+    { key: 'panda', emoji: '🐼' },
+    { key: 'frog', emoji: '🐸' },
+    { key: 'pig', emoji: '🐷' },
+    { key: 'fox', emoji: '🦊' },
+    { key: 'tiger', emoji: '🐯' },
+    { key: 'chick', emoji: '🐤' },
+    { key: 'penguin', emoji: '🐧' },
+    { key: 'butterfly', emoji: '🦋' },
+    { key: 'fish', emoji: '🐟' },
+    { key: 'snail', emoji: '🐌' }
+];
+/** Минимум и максимум предметов в раунде */
+const COUNTING_MIN = 3;
+const COUNTING_MAX = 10;
+/** Пауза перед итогом — чтобы последнее «десять» не наложилось на «Десять котиков» */
+const COUNTING_TOTAL_DELAY_MS = 900;
+/** Пауза перед новым раундом после итога */
+const COUNTING_NEXT_ROUND_MS = 2600;
+
+let countingKind = null;
+let countingTotal = 0;
+let countingDone = 0;
+let countingFinishedAt = 0;
+/** Сколько полных пересчётов сделано — по ним считается цель уровня */
+let countingRounds = 0;
+
+function resetCountingState() {
+    countingKind = null;
+    countingTotal = 0;
+    countingDone = 0;
+    countingFinishedAt = 0;
+    countingRounds = 0;
+    countingHand = null;
+    countHearts = [];
+}
+
+/** Длительность радостного прыжка сосчитанного котика */
+const COUNT_ANIM_MS = 1100;
+/** После прыжка котик плавно тускнеет — видно, что с ним закончили */
+const COUNT_FADE_MS = 500;
+
+const easeOutQuad = (u) => 1 - (1 - u) * (1 - u);
+
+/**
+ * Кривая радостного прыжка: присел → подпрыгнул, вытянувшись → приземлился
+ * с пружинкой → покачался. Squash & stretch делает движение живым,
+ * а не механическим подъёмом-опусканием.
+ * dy — в долях радиуса (минус — вверх), sx/sy — масштаб, rot — наклон в радианах.
+ */
+function countJumpPose(ms) {
+    const pose = { dy: 0, sx: 1, sy: 1, rot: 0 };
+    if (ms >= COUNT_ANIM_MS) return pose;
+
+    if (ms < 120) {
+        /** Присел перед прыжком */
+        const u = easeOutQuad(ms / 120);
+        pose.sx = 1 + 0.22 * u;
+        pose.sy = 1 - 0.2 * u;
+    } else if (ms < 520) {
+        /** Полёт: на взлёте вытянут, к вершине округляется */
+        const u = (ms - 120) / 400;
+        pose.dy = -Math.sin(Math.PI * u) * 0.8;
+        const stretch = Math.cos(Math.PI * u);
+        pose.sx = 1 - 0.14 * Math.abs(stretch);
+        pose.sy = 1 + 0.2 * Math.abs(stretch);
+    } else if (ms < 680) {
+        /** Приземление: сплющился и отпружинил */
+        const u = (ms - 520) / 160;
+        const squash = Math.sin(Math.PI * u);
+        pose.sx = 1 + 0.2 * squash;
+        pose.sy = 1 - 0.18 * squash;
+    } else {
+        /** Довольно покачался из стороны в сторону, затухая */
+        const u = (ms - 680) / (COUNT_ANIM_MS - 680);
+        pose.rot = Math.sin(u * Math.PI * 3) * 0.2 * (1 - u);
+    }
+    return pose;
+}
+
+/**
+ * Сердечко, вылетающее из сосчитанного котика. Отдельно от FloatingText:
+ * у того тёмная обводка текста, на эмодзи она смотрится грязно.
+ */
+class CountHeart {
+    constructor(x, y, size) {
+        this.x = x;
+        this.y = y;
+        this.size = size * (0.7 + Math.random() * 0.5);
+        /** Разлёт веером в стороны и вверх — чтобы сердечки не кучковались на номере */
+        this.vx = (Math.random() * 2 - 1) * 3.4;
+        this.vy = -(3.2 + Math.random() * 2.6);
+        this.phase = Math.random() * Math.PI * 2;
+        this.life = 1;
+        this.emoji = ['💖', '💛', '💚', '💙', '💜', '⭐'][Math.floor(Math.random() * 6)];
+    }
+    update(dt = 1) {
+        this.phase += 0.12 * dt;
+        this.x += (this.vx + Math.sin(this.phase) * 0.8) * dt;
+        this.y += this.vy * dt;
+        this.vy *= 0.975;
+        /** ~1.5 с жизни: ребёнок должен успеть их увидеть */
+        this.life -= 0.011 * dt;
+    }
+    draw(ctx) {
+        if (this.life <= 0) return;
+        const tex = getOrCreateEmojiTexture(this.emoji);
+        /** Вырастает в первые мгновения, потом тает */
+        const grow = Math.min(1, (1 - this.life) * 6);
+        const s = this.size * grow;
+        ctx.save();
+        /** Полностью яркие большую часть жизни, тают только в самом конце */
+        ctx.globalAlpha = Math.min(1, this.life * 3);
+        ctx.drawImage(tex.canvas, this.x - s / 2, this.y - s / 2, s, s);
+        ctx.restore();
+    }
+}
+let countHearts = [];
+
+function spawnCountHearts(x, y, radius) {
+    for (let i = 0; i < 7; i++) countHearts.push(new CountHeart(x, y - radius * 0.2, radius * 0.75));
+}
+
+/**
+ * Случайная раскладка по всему экрану без наложений.
+ *
+ * Для каждого предмета бросаем случайные точки и берём первую, где он ни с кем
+ * не пересекается. Это честная случайность: способ «самый дальний из кандидатов»
+ * разводил котиков слишком ровно, и они снова выстраивались сеткой.
+ *
+ * Между предметами гарантирован зазор. Если все не поместились, пробуем ещё
+ * несколько раскладок того же размера и только потом уменьшаем.
+ * Возвращает { spots, radius } — радиус мог уменьшиться.
+ */
+function countingLayout(n, w, h, radius) {
+    /** Поля: сверху HUD со счётом, снизу кнопка «Меню», по бокам край кадра */
+    const left = w * 0.06;
+    const right = w * 0.94;
+    const top = h * 0.17;
+    const bottom = h * 0.88;
+    const TRIES_PER_ITEM = 120;
+
+    let r = radius;
+    for (let attempt = 0; attempt < 60; attempt++) {
+        if (attempt > 0 && attempt % 8 === 0) r *= 0.95;
+        const minDist = r * 2 + Math.max(26, r * 0.35);
+        const spanX = Math.max(1, right - left - r * 2);
+        const spanY = Math.max(1, bottom - top - r * 2);
+        const spots = [];
+        for (let i = 0; i < n; i++) {
+            let placed = null;
+            for (let t = 0; t < TRIES_PER_ITEM && !placed; t++) {
+                const x = left + r + Math.random() * spanX;
+                const y = top + r + Math.random() * spanY;
+                if (spots.every((s) => Math.hypot(s.x - x, s.y - y) >= minDist)) placed = { x, y };
+            }
+            if (!placed) break;
+            spots.push(placed);
+        }
+        if (spots.length === n) return { spots, radius: r };
+    }
+    /** Крайний случай: экран совсем маленький — лучше мелкие котики, чем наложение */
+    if (r < 14) return { spots: [], radius: r };
+    return countingLayout(n, w, h, r * 0.8);
+}
+
 /** Контраст: 1.0 против 0.5 — различие очевидно, но предмет ещё узнаваем */
 const COMPARE_AXIS_WIDE = 1.0;
 const COMPARE_AXIS_NARROW = 0.5;
@@ -2419,8 +2690,8 @@ const HOLD_RADIUS_BONUS_PX = 46;
 
 /** После стольких ошибок подряд — подсветка нужного объекта и повтор задания */
 const COMPARE_HINT_AFTER_ERRORS = 5;
-/** Пауза перед следующей парой, чтобы ребёнок увидел награду */
-const COMPARE_NEXT_ROUND_DELAY_MS = 1200;
+/** Пауза перед следующей парой: прыжок (1.1 с) должен доиграть, а сердечки — разлететься */
+const COMPARE_NEXT_ROUND_DELAY_MS = 1600;
 
 /**
  * Антиповтор: помним последние выданные задания и объекты, чтобы подряд
@@ -2649,6 +2920,30 @@ function buildCompareRound() {
         objects,
         task: { kind: 'shape', taskKey: pickedShape, correctId: askFirst ? idA : idB }
     };
+}
+
+/** Раскладывает предметы для счёта и произносит вступление */
+function startCountingRound() {
+    const { w, h, minSide } = gameLayout;
+    fruits.length = 0;
+    countHearts = [];
+    /** Не повторяем вид из прошлого раунда — разнообразие держит внимание */
+    const prevKey = countingKind?.key;
+    const pool = COUNTING_KINDS.filter((k) => k.key !== prevKey);
+    countingKind = pool[Math.floor(Math.random() * pool.length)];
+    countingTotal = COUNTING_MIN + Math.floor(Math.random() * (COUNTING_MAX - COUNTING_MIN + 1));
+    countingDone = 0;
+    countingFinishedAt = 0;
+
+    const { spots, radius } = countingLayout(countingTotal, w, h, Math.min(150, Math.max(54, minSide * 0.105)));
+    /** Если экран не вместил всех, считаем столько, сколько поставили — итог должен совпасть */
+    countingTotal = spots.length;
+    spots.forEach((p, i) => {
+        fruits.push(new Fruit({ counting: true, id: i + 1, x: p.x, y: p.y, radius, emoji: countingKind.emoji }));
+    });
+
+    /** Пауза: сначала ребёнок видит предметы, потом слышит задание */
+    setTimeout(() => playCountingSound(`intro_${countingKind.key}`), 450);
 }
 
 /** Ставит на экран новую пару и озвучивает задание */
@@ -2925,6 +3220,10 @@ class Fruit {
         const levelCfg = getCurrentLevelConfig();
         this.levelMode = levelCfg.mode || 'fruit';
 
+        if (compareSpec?.counting) {
+            this.initCounting(compareSpec, minSide);
+            return;
+        }
         if (compareSpec) {
             this.initCompare(compareSpec, w, h, minSide);
             return;
@@ -3022,6 +3321,53 @@ class Fruit {
      * Статичный объект пары: висит на месте, без гравитации и подброса.
      * Позиция по X задаётся слотом (левый/правый), Y общий — различие только в предмете.
      */
+    /**
+     * Счётный предмет. Переиспользует isCompareObject, чтобы работала та же
+     * механика удержания; отличается тем, что после счёта не исчезает,
+     * а помечается номером — ребёнок должен видеть, что уже сосчитано.
+     */
+    initCounting(spec, minSide) {
+        this.isCompareObject = true;
+        this.isCountingObject = true;
+        this.compareId = spec.id;
+        this.x = spec.x;
+        this.y = spec.y;
+        this.vx = 0;
+        this.vy = 0;
+        this.gravity = 0;
+        /** Радиус задаёт раскладка: на тесном экране она могла его уменьшить */
+        this.radius = spec.radius ?? Math.min(150, Math.max(54, minSide * 0.105));
+        this.emoji = spec.emoji;
+        this.textureRef = getOrCreateEmojiTexture(spec.emoji);
+        this.color = '#7CFFB2';
+
+        this.isSliced = false;
+        this.sliceOffsetX = 0;
+        this.hitFlash = 0;
+        this._wasTouchingHand = false;
+        this._noContactFrames = 0;
+        this.hintPulse = 0;
+        this.errorFlash = 0;
+        this.holdProgress = 0;
+        this.holdLocked = false;
+        /** Номер, под которым предмет сосчитан; 0 — ещё не считали */
+        this.countNumber = 0;
+        /** Всплытие номера после счёта: 1 → 0 */
+        this.countPop = 0;
+        /** Сколько мс прошло с момента счёта — двигает анимацию прыжка */
+        this.countAnimMs = 0;
+
+        this.rotation = 0;
+        this.rotationSpeed = 0;
+        this.scaleX = 1;
+        this.scaleY = 1;
+        this.cutAngle = 0;
+        this.rot1 = 0;
+        this.rot2 = 0;
+        this.rotSpeed1 = 0;
+        this.rotSpeed2 = 0;
+    }
+
     initCompare(spec, w, h, minSide) {
         /** Помечаем объект как участника сравнения — режимов сравнения несколько */
         this.isCompareObject = true;
@@ -3095,6 +3441,42 @@ class Fruit {
      * потому что там действуют поворот объекта и компенсация зеркала —
      * кольцо от них бы перекосилось и поехало.
      */
+    /**
+     * Номер сосчитанного предмета. Ребёнок должен видеть, что уже посчитано,
+     * иначе он теряет место и пересчитывает по кругу — в тетради ту же роль
+     * играет карандашная пометка. Номер, а не галочка: связывает предмет с числом.
+     */
+    drawCountBadge(ctx) {
+        if (!this.isCountingObject || this.countNumber <= 0) return;
+        const pop = this.countPop;
+        const r = this.radius * 0.42 * (1 + pop * 0.35);
+        const cx = this.x;
+        /** Номер подпрыгивает вместе с котиком */
+        const cy = this.y - this.radius * 0.72 + countJumpPose(this.countAnimMs).dy * this.radius;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        /** Canvas зеркалится через CSS scaleX(-1) — компенсируем, иначе цифра задом наперёд */
+        ctx.scale(-1, 1);
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(16, 28, 20, 0.86)';
+        ctx.fill();
+        ctx.lineWidth = Math.max(3, r * 0.16);
+        ctx.strokeStyle = '#7CFFB2';
+        ctx.shadowColor = '#7CFFB2';
+        ctx.shadowBlur = 14 + pop * 22;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#eafff2';
+        ctx.font = `900 ${Math.round(r * 1.25)}px "Outfit", system-ui, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(this.countNumber), 0, r * 0.04);
+        ctx.restore();
+    }
+
     drawHoldRing(ctx) {
         if (!this.isCompareObject || this.isSliced || this.holdProgress <= 0.01) return;
         /** Кольцо шире самого объекта — иначе оно липнет к картинке и мешает её рассмотреть */
@@ -3147,6 +3529,10 @@ class Fruit {
             if (this.hitFlash > 0) this.hitFlash -= 0.35 * dt;
             /** ~0.9 с на затухание: ребёнку нужно время заметить и связать с действием */
             if (this.errorFlash > 0) this.errorFlash = Math.max(0, this.errorFlash - 0.0185 * dt);
+            if (this.countPop > 0) this.countPop = Math.max(0, this.countPop - 0.045 * dt);
+            if ((this.countNumber > 0 || this.celebrating) && this.countAnimMs < COUNT_ANIM_MS + COUNT_FADE_MS) {
+                this.countAnimMs += dt * (1000 / 60);
+            }
             if (compareHintActive && this.isCompareCorrect && !this.isSliced) {
                 this.hintPulse += 0.09 * dt;
             }
@@ -3213,7 +3599,21 @@ class Fruit {
                 const blurBase = this.levelMode === 'fruit' ? 18 : 26;
                 ctx.shadowBlur = blurBase + this.hitFlash * 2;
             }
+            if ((this.isCountingObject && this.countNumber > 0) || this.celebrating) {
+                /** Прыжок с опорой на «пол»: сплющивание идёт от нижнего края, как у мячика */
+                const pose = countJumpPose(this.countAnimMs);
+                ctx.translate(0, drawSize / 2 + pose.dy * this.radius);
+                ctx.rotate(pose.rot);
+                ctx.scale(pose.sx, pose.sy);
+                ctx.translate(0, -drawSize / 2);
+                /** Сосчитанный котик после прыжка тускнеет — отметка «готово». В сравнении раунд и так сменится */
+                if (this.isCountingObject) {
+                    const fadeU = Math.min(1, Math.max(0, (this.countAnimMs - COUNT_ANIM_MS) / COUNT_FADE_MS));
+                    ctx.globalAlpha = 1 - 0.55 * fadeU;
+                }
+            }
             ctx.drawImage(texture, -drawSize / 2, -drawSize / 2, drawSize, drawSize);
+            ctx.globalAlpha = 1;
             ctx.shadowBlur = 0;
             /** Подкрашиваем сам силуэт — на яркой фигуре одного свечения не видно */
             if (this.isCompareObject && this.errorFlash > 0) {
@@ -4023,6 +4423,12 @@ function gameLoop(nowTime) {
 
     if (!nowTime) nowTime = performance.now();
     let dt = (nowTime - lastFrameTime) / (1000 / 60); // Normalize to 60fps
+    /**
+     * Удержанию нужно настоящее время, а не физическое: dt ниже режется до 3,
+     * и при fps < 20 секунда удержания растягивалась бы вдвое. Потолок 250 мс
+     * лишь отсекает паузы вроде свёрнутой вкладки.
+     */
+    const holdFrameMs = Math.max(0, Math.min(250, nowTime - lastFrameTime));
     if (dt > 3) dt = 3; // Cap lag spikes
     if (dt < 0) dt = 0; // Prevent reverse time
     lastFrameTime = nowTime;
@@ -4104,7 +4510,12 @@ function gameLoop(nowTime) {
     /** Позиции кончиков пальцев в этом кадре — для режима «поднеси и удержи» */
     const handTipPoints = [];
     /** Виртуальный палец для автотестов — камера в них не даёт рук */
-    if (import.meta.env?.DEV && window.__holdProbe) handTipPoints.push(window.__holdProbe);
+    if (import.meta.env?.DEV && window.__holdProbe) {
+        handTipPoints.push({ ...window.__holdProbe, hand: window.__holdProbe.hand || 'probe' });
+    }
+    if (import.meta.env?.DEV && Array.isArray(window.__holdProbes)) {
+        for (const p of window.__holdProbes) handTipPoints.push({ ...p, hand: p.hand || 'probe' });
+    }
     /** Режим «Доски»: сегменты ударов рук и ног отдельно — доска ломается только «своей» частью тела */
     const boardHandStrikeSegments = levelCfg.mode === 'board' ? [] : null;
     const boardFootStrikeSegments = levelCfg.mode === 'board' ? [] : null;
@@ -4208,8 +4619,11 @@ function gameLoop(nowTime) {
         }
         for (const tipIdx of activeTipIndices) {
             const tip = getScreenPoint(landmarks[tipIdx]);
-            /** Текущие позиции кончиков — для механики удержания (в отличие от путей для реза) */
-            handTipPoints.push(tip);
+            /**
+             * Текущие позиции кончиков — для механики удержания (в отличие от путей для реза).
+             * key различает руки: в счёте считать можно только одной.
+             */
+            handTipPoints.push({ x: tip.x, y: tip.y, hand: key });
             if (prev[tipIdx]) {
                 appendSweepCollisionSegments(handSegments, prev[tipIdx], tip);
                 const jx = tip.x - prev[tipIdx].x;
@@ -4289,8 +4703,14 @@ function gameLoop(nowTime) {
         lastSpawnTime = now;
     }
 
-    /** Режим сравнения: раунды идут по одному, следующий — после паузы на награду */
-    if (isCompareMode(levelCfg.mode) && !levelComplete) {
+    /** Счёт: раунд живёт, пока все предметы не пересчитаны, потом новый набор */
+    if (levelCfg.mode === 'counting' && !levelComplete) {
+        if (!countingTotal) {
+            startCountingRound();
+        } else if (countingFinishedAt && now - countingFinishedAt >= COUNTING_NEXT_ROUND_MS) {
+            startCountingRound();
+        }
+    } else if (isCompareMode(levelCfg.mode) && !levelComplete) {
         if (!compareTask) {
             startCompareRound();
         } else if (compareRoundResolved && now >= compareNextRoundAt) {
@@ -4333,11 +4753,15 @@ function gameLoop(nowTime) {
         }
     }
 
+    /** Ровно один удерживаемый предмет на кадр — считаем до цикла, чтобы сравнить с каждым */
+    const heldFruit = pickHeldFruit(fruits, handTipPoints, levelCfg.mode);
+
     for (let i = fruits.length - 1; i >= 0; i--) {
         let fruit = fruits[i];
         fruit.update(dt);
         fruit.draw(canvasCtx);
         fruit.drawHoldRing(canvasCtx);
+        fruit.drawCountBadge(canvasCtx);
 
         // Рез: путь кончиков пересёк круг предмета (любой сегмент), но засчёт — на «входе» в контакт, не каждый кадр
         if (!fruit.isSliced) {
@@ -4366,7 +4790,7 @@ function gameLoop(nowTime) {
 
             if (fruit.isCompareObject) {
                 /** Выбор удержанием: взмах здесь ничего не решает, важна задержка руки */
-                updateHoldProgress(fruit, handTipPoints, dt);
+                updateHoldProgress(fruit, fruit === heldFruit, holdFrameMs);
                 continue;
             }
 
@@ -4420,6 +4844,14 @@ function gameLoop(nowTime) {
         ft.update(dt);
         ft.draw(canvasCtx);
         if (ft.life <= 0) floatingTexts.splice(i, 1);
+    }
+
+    /** Сердечки от сосчитанных котиков */
+    for (let i = countHearts.length - 1; i >= 0; i--) {
+        const hp = countHearts[i];
+        hp.update(dt);
+        hp.draw(canvasCtx);
+        if (hp.life <= 0) countHearts.splice(i, 1);
     }
 
     // Мягкая вспышка-«сок» на удачный рез
@@ -4526,10 +4958,14 @@ if (import.meta.env?.DEV) {
                 sliced: f.isSliced,
                 errorFlash: Number((f.errorFlash || 0).toFixed(2)),
                 holdProgress: Number((f.holdProgress || 0).toFixed(2)),
+                countNumber: f.countNumber || 0,
                 x: Math.round(f.x),
                 y: Math.round(f.y)
             }))
         }),
+        /** Новый раунд счёта — чтобы в тестах посмотреть разные раскладки */
+        restartCounting: () => startCountingRound(),
+        countingKind: () => (countingKind ? `${countingKind.emoji} ${countingKind.key}` : null),
         /** Имитирует рез объекта рукой */
         cut: (id) => {
             const target = fruits.find((f) => f.compareId === id);
