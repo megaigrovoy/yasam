@@ -11,3 +11,6 @@ books/
 .env
 .env.*
 !.env.example
+
+# Образцы голосов для выбора — не часть игры
+voice-samples/

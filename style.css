@@ -703,10 +703,12 @@ canvas {
 
 @media (min-width: 700px) {
   .menu-quick-settings {
-    /* Осталась только аудио-колонка: язык и число игроков убраны из меню */
+    /* Язык сверху, под ним звук и музыка */
     display: grid;
     grid-template-columns: 1fr;
-    grid-template-areas: "audio";
+    grid-template-areas:
+      "lang"
+      "audio";
     row-gap: 0.45rem;
     align-items: stretch;
   }

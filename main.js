@@ -5,13 +5,20 @@ const MEDIAPIPE_TASKS_VISION_WASM_VER = '0.10.34';
 
 const STORAGE_SFX_OFF = 'neon-ninja-sfx-off';
 const STORAGE_MUSIC_OFF = 'neon-ninja-music-off';
-/**
- * Язык интерфейса и озвучки. Сейчас записан только русский голос, поэтому
- * язык зафиксирован: сохранённое в localStorage значение намеренно игнорируется,
- * иначе игроки с ранее выбранным 'en' остались бы без переключателя на английском.
- * Английские строки и звуки в коде сохранены — вернуть можно сменой этой константы.
- */
-let uiLang = 'ru';
+/** Языки интерфейса и озвучки: у каждого свой голос и папки tasks/<язык>, feedback/<язык> */
+const UI_LANGS = ['ru', 'en', 'el'];
+const STORAGE_UI_LANG = 'yasam-ui-lang';
+
+/** Выбор из меню переживает перезагрузку; неизвестное значение — русский */
+function loadUiLangPreference() {
+    try {
+        const v = localStorage.getItem(STORAGE_UI_LANG);
+        return UI_LANGS.includes(v) ? v : 'ru';
+    } catch {
+        return 'ru';
+    }
+}
+let uiLang = loadUiLangPreference();
 
 /**
  * numPoses у PoseLandmarker. Режим на двоих сейчас не используется —
@@ -231,20 +238,24 @@ const enBoardHintUrlByStem = Object.fromEntries(
 );
 
 /**
- * Озвучка задания в режиме сравнения — sounds/tasks/ru|en.
- * Имя файла = ключ задания: bigger, smaller, circle, square, triangle, star,
- * prefix_letter, prefix_number (+ задел longer/shorter/taller/thicker/thinner).
+ * Озвучка заданий по языкам — sounds/tasks/<язык>/[группа/]<ключ>.mp3.
+ * Язык берётся из пути, так что новый язык подключается простым добавлением папки.
+ * Группы: '' — сравнение (bigger_circle, circle…), letters, numbers, counting.
+ *   TASK_AUDIO[lang][group][key] → url
  */
-const ruTaskUrlByKey = Object.fromEntries(
-    Object.entries(
-        import.meta.glob('./src/assets/sounds/tasks/ru/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
-    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
-);
-const enTaskUrlByKey = Object.fromEntries(
-    Object.entries(
-        import.meta.glob('./src/assets/sounds/tasks/en/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
-    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
-);
+const TASK_AUDIO = {};
+for (const [path, href] of Object.entries(
+    import.meta.glob('./src/assets/sounds/tasks/**/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
+)) {
+    const m = path.match(/\/tasks\/([^/]+)\/(?:([^/]+)\/)?([^/]+)\.mp3$/i);
+    if (!m) continue;
+    const [, lang, group = '', key] = m;
+    ((TASK_AUDIO[lang] ??= {})[group] ??= {})[key.toLowerCase()] = href;
+}
+/** Звук задания на текущем языке; если файла нет — молчим, а не говорим на чужом языке */
+function taskAudio(group, key) {
+    return TASK_AUDIO[uiLang]?.[group]?.[String(key).toLowerCase()] || null;
+}
 
 /** Спрайты предметов сравнения — images/objects/pencil_long.webp и т. п. */
 const objectSpriteUrlByKey = Object.fromEntries(
@@ -257,36 +268,14 @@ const objectSpriteUrlByKey = Object.fromEntries(
     ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.[^.]+$/, '').toLowerCase(), href])
 );
 
-/** Задания на буквы и цифры — tasks/ru/letters/а.mp3, tasks/ru/numbers/3.mp3 */
-const ruLetterTaskUrlByKey = Object.fromEntries(
-    Object.entries(
-        import.meta.glob('./src/assets/sounds/tasks/ru/letters/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
-    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
-);
-const ruNumberTaskUrlByKey = Object.fromEntries(
-    Object.entries(
-        import.meta.glob('./src/assets/sounds/tasks/ru/numbers/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
-    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
-);
-
-/** Режим счёта — tasks/ru/counting: intro_<вид>, count_1..10 (счёт вслух), total_1..10 (итог) */
-const ruCountingUrlByKey = Object.fromEntries(
-    Object.entries(
-        import.meta.glob('./src/assets/sounds/tasks/ru/counting/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
-    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
-);
-
-/** Обратная связь — sounds/feedback/ru|en: error.mp3 + praise_1..N.mp3 (случайная похвала) */
-const ruFeedbackUrlByKey = Object.fromEntries(
-    Object.entries(
-        import.meta.glob('./src/assets/sounds/feedback/ru/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
-    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
-);
-const enFeedbackUrlByKey = Object.fromEntries(
-    Object.entries(
-        import.meta.glob('./src/assets/sounds/feedback/en/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
-    ).map(([path, href]) => [path.replace(/^.*\//, '').replace(/\.mp3$/i, '').toLowerCase(), href])
-);
+/** Обратная связь по языкам — sounds/feedback/<язык>/error.mp3, praise_1..N.mp3 */
+const FEEDBACK_AUDIO = {};
+for (const [path, href] of Object.entries(
+    import.meta.glob('./src/assets/sounds/feedback/*/*.{mp3,MP3}', { eager: true, query: '?url', import: 'default' })
+)) {
+    const m = path.match(/\/feedback\/([^/]+)\/([^/]+)\.mp3$/i);
+    if (m) (FEEDBACK_AUDIO[m[1]] ??= {})[m[2].toLowerCase()] = href;
+}
 
 /** Фанфары/«ты победил» на экране победы — sounds/win/ru|en (любые имена, случайный) */
 const ruWinUrls = Object.values(
@@ -429,7 +418,7 @@ function speakFallback(text) {
     try {
         speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(text);
-        u.lang = uiLang === 'en' ? 'en-US' : 'ru-RU';
+        u.lang = { en: 'en-US', el: 'el-GR' }[uiLang] || 'ru-RU';
         u.rate = 0.85;
         speechSynthesis.speak(u);
     } catch {
@@ -437,44 +426,42 @@ function speakFallback(text) {
     }
 }
 
-/** Озвучка задания «разрежь X» — файл из tasks/, иначе синтез речи */
 /**
- * Озвучка задания. Для свойств («большой», «маленький») ищем фразу, согласованную
- * с объектом — bigger_circle, bigger_star: в русском прилагательное меняет род,
- * поэтому склеить «большой» + название нельзя, фраза записана целиком.
+ * Озвучка задания на текущем языке. Для свойств («большой», «маленький») ищем фразу,
+ * согласованную с объектом — bigger_circle, bigger_star: и в русском, и в греческом
+ * прилагательное меняет род, поэтому склеить «большой» + название нельзя.
  */
 function playTaskSound(taskKey, objectKey, taskKind) {
     if (!soundEffectsEnabled || !taskKey) return;
     if (taskKind === 'letter' || taskKind === 'number') {
-        const glyphMap = taskKind === 'letter' ? ruLetterTaskUrlByKey : ruNumberTaskUrlByKey;
-        const glyphUrl = glyphMap[String(taskKey).toLowerCase()];
+        const glyphUrl = taskAudio(taskKind === 'letter' ? 'letters' : 'numbers', taskKey);
         if (glyphUrl) playOneShotSfx(glyphUrl, 1.0);
         return;
     }
-    const map = uiLang === 'en' ? enTaskUrlByKey : ruTaskUrlByKey;
     const key = String(taskKey).toLowerCase();
-    const url = (objectKey && map[`${key}_${String(objectKey).toLowerCase()}`]) || map[key];
+    const url = (objectKey && taskAudio('', `${key}_${String(objectKey).toLowerCase()}`)) || taskAudio('', key);
     if (url) {
         playOneShotSfx(url, 1.0);
         return;
     }
-    const fb = TASK_SPEECH_FALLBACK[uiLang] || TASK_SPEECH_FALLBACK.ru;
+    /** Нет текстов на этом языке — молчим: русская фраза греческим голосом хуже тишины */
+    const fb = TASK_SPEECH_FALLBACK[uiLang];
+    if (!fb) return;
     /** Сначала фраза под конкретный объект, иначе общая — род может не совпасть, но смысл сохранится */
     speakFallback((objectKey && fb[`${key}_${String(objectKey).toLowerCase()}`]) || fb[taskKey]);
 }
 
-/** Озвучка режима счёта: intro_<вид>, count_N, total_N */
+/** Озвучка режима счёта: intro_<вид>, count_N, total_<вид>_N */
 function playCountingSound(key) {
     if (!soundEffectsEnabled || !key) return;
-    const url = ruCountingUrlByKey[String(key).toLowerCase()];
+    const url = taskAudio('counting', key);
     if (url) playOneShotSfx(url, 1.0);
 }
 
 /** Мягкий сигнал ошибки — не должен пугать ребёнка */
 function playErrorSound() {
     if (!soundEffectsEnabled) return;
-    const map = uiLang === 'en' ? enFeedbackUrlByKey : ruFeedbackUrlByKey;
-    const url = map.error;
+    const url = FEEDBACK_AUDIO[uiLang]?.error;
     if (url) {
         playOneShotSfx(url, 0.85);
         return;
@@ -503,8 +490,7 @@ function playSynthErrorBeep() {
 /** Похвала за верный рез — feedback/praise_*.mp3, иначе существующий praise/ */
 function playComparePraiseSound() {
     if (!soundEffectsEnabled) return;
-    const map = uiLang === 'en' ? enFeedbackUrlByKey : ruFeedbackUrlByKey;
-    const praise = Object.entries(map)
+    const praise = Object.entries(FEEDBACK_AUDIO[uiLang] || {})
         .filter(([key]) => key.startsWith('praise'))
         .map(([, href]) => href);
     const url = pickRandomUrl(praise);
@@ -598,6 +584,8 @@ function playDecodedSfx(ctx, buffer, volume) {
 
 function playOneShotSfx(url, volume) {
     if (!soundEffectsEnabled || !url) return;
+    /** Журнал проигранного — автотесты проверяют, что звучит нужный язык */
+    if (import.meta.env?.DEV) (window.__sfxLog ??= []).push(url);
     const ctx = window.__ninjaAudioCtx || getOrCreateSfxContext();
     const ready = ctx && sfxAudioBufferByUrl.get(url);
     if (ctx && ready) {
@@ -1724,6 +1712,60 @@ const I18N = {
         errorHintNoCamera: 'No camera found. Check that it is connected and not used by another app.',
         errorHintTimeout:
             'The camera did not start in time. Turn off device emulation in DevTools (or pick a real camera), close other apps using the camera, and refresh.'
+    },
+    el: {
+        tierProducts: 'Τρόφιμα',
+        tierLetters: 'Γράμματα',
+        tierNumbers: 'Αριθμοί',
+        tierWords: 'Λέξεις',
+        tierBoards: 'Σανίδες',
+        tierCompare: 'Σύγκριση',
+        tierCompareLetters: 'Γράμματα',
+        tierCompareNumbers: 'Αριθμοί',
+        tierCounting: 'Μέτρησε',
+        hudAtOnce: 'ταυτόχρονα',
+        comboLabel: 'Σερί',
+        comboMax: 'Καλύτερο σερί',
+        wordPrompt: 'Σχημάτισε τη λέξη',
+        winTitle: 'Το επίπεδο ολοκληρώθηκε!',
+        winScoreLabel: 'Πόντοι',
+        winNextLevel: 'Επόμενο',
+        winAutoHint: 'Επόμενο επίπεδο σε',
+        winReplay: 'Ξανά',
+        winToMenu: 'Μενού',
+        praiseGreat: 'Τέλεια!',
+        praiseSuper: 'Σούπερ!',
+        praiseWow: 'Ουάου!',
+        praiseCombo: 'Σερί',
+        hudGoal: 'Στόχος',
+        scorePrefix: 'Πόντοι: ',
+        menuHeading: 'Διάλεξε παιχνίδι',
+        menuHint: 'Άκου την οδηγία και κράτα το χέρι σου πάνω στο σωστό αντικείμενο.',
+        quickSettingsAria: 'Γλώσσα, ήχος και μουσική',
+        langLabel: 'Γλώσσα',
+        playersOnCamera: 'Αριθμός παικτών',
+        gamesGallery: 'Συλλογή παιχνιδιών',
+        gamesGalleryAria: 'Μετάβαση στη συλλογή Blago Games',
+        playersOneAria: 'Ένας παίκτης',
+        playersTwoAria: 'Δύο παίκτες',
+        soundInGame: 'Ήχοι παιχνιδιού',
+        soundOffAria: 'Σίγαση ήχων παιχνιδιού',
+        musicTitle: 'Μουσική',
+        musicDesc: 'Μενού και παιχνίδι',
+        musicOffAria: 'Σίγαση μουσικής',
+        fullscreenEnter: 'Πλήρης οθόνη',
+        fullscreenExit: 'Έξοδος από πλήρη οθόνη',
+        fullscreenEnterAria: 'Είσοδος σε πλήρη οθόνη',
+        fullscreenExitAria: 'Έξοδος από πλήρη οθόνη',
+        backToMenu: 'Μενού',
+        loadingModels: 'Φόρτωση μοντέλων…',
+        errorTitle: 'Δεν ήταν δυνατή η εκκίνηση του παιχνιδιού.',
+        errorHintGeneric: 'Ανοίξτε την κονσόλα του προγράμματος περιήγησης (F12 → Console) και στείλτε το κείμενο του σφάλματος.',
+        errorHintCameraBlocked:
+            'Το πρόγραμμα περιήγησης μπλόκαρε την κάμερα για αυτόν τον ιστότοπο. Πατήστε το λουκέτο δίπλα στη διεύθυνση → επιτρέψτε την κάμερα και ανανεώστε τη σελίδα.',
+        errorHintNoCamera: 'Δεν βρέθηκε κάμερα. Ελέγξτε ότι είναι συνδεδεμένη και δεν χρησιμοποιείται από άλλη εφαρμογή.',
+        errorHintTimeout:
+            'Η κάμερα δεν ξεκίνησε εγκαίρως. Κλείστε άλλες εφαρμογές που χρησιμοποιούν την κάμερα και ανανεώστε τη σελίδα.'
     }
 };
 
@@ -1783,6 +1825,10 @@ function formatHudLevelLine(levelIndex, maxConcurrent) {
     if (uiLang === 'en') {
         return `${title} · ${pluralSimultaneousEn(maxConcurrent)} ${t('hudAtOnce')}`.trim();
     }
+    if (uiLang === 'el') {
+        const noun = maxConcurrent === 1 ? 'αντικείμενο' : 'αντικείμενα';
+        return `${title} · ${maxConcurrent} ${noun} ${t('hudAtOnce')}`;
+    }
     return `${title} · одновременно ${pluralSimultaneousRu(maxConcurrent)}`;
 }
 
@@ -1809,11 +1855,25 @@ function buildLevelGrid() {
     });
 }
 
+/** Смена языка из меню: интерфейс перестраивается сразу, озвучка — со следующего задания */
+function setUiLang(lang) {
+    if (!UI_LANGS.includes(lang) || lang === uiLang) return;
+    uiLang = lang;
+    try {
+        localStorage.setItem(STORAGE_UI_LANG, lang);
+    } catch {
+        /* приватный режим — выбор просто не запомнится */
+    }
+    applyUiTranslations();
+}
+
 function applyUiTranslations() {
     const mh = document.getElementById('menu-heading');
     if (mh) mh.textContent = t('menuHeading');
     const hint = document.getElementById('menu-hint');
     if (hint) hint.textContent = t('menuHint');
+    const ml = document.getElementById('menu-lang-label');
+    if (ml) ml.textContent = t('langLabel');
     const mq = document.getElementById('menu-quick-settings');
     if (mq) mq.setAttribute('aria-label', t('quickSettingsAria'));
     const mgl = document.getElementById('menu-games-gallery-label');
@@ -1833,10 +1893,8 @@ function applyUiTranslations() {
     const lt = document.getElementById('loading-text');
     if (lt) lt.textContent = t('loadingModels');
     if (btnBackMenu) btnBackMenu.textContent = t('backToMenu');
-    const olru = document.getElementById('opt-lang-ru');
-    const olen = document.getElementById('opt-lang-en');
-    if (olru) olru.checked = uiLang === 'ru';
-    if (olen) olen.checked = uiLang === 'en';
+    for (const r of document.querySelectorAll('input[name="ninja-lang"]')) r.checked = r.value === uiLang;
+    document.documentElement.lang = uiLang;
     syncFullscreenButton();
     buildLevelGrid();
     if (scoreDisplay) scoreDisplay.innerText = formatScore(isPlaying ? score : 0);
@@ -2022,6 +2080,12 @@ mainMenu.addEventListener(
     },
     { capture: true, passive: true }
 );
+
+for (const r of document.querySelectorAll('input[name="ninja-lang"]')) {
+    r.addEventListener('change', () => {
+        if (r.checked) setUiLang(r.value);
+    });
+}
 
 const optSoundOff = document.getElementById('opt-sound-off');
 const optMusicOff = document.getElementById('opt-music-off');
@@ -2386,8 +2450,13 @@ const CYRILLIC_LETTERS = [
 /** Латиница для буквенных уровней при английском UI */
 const LATIN_LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i));
 
+/** Греческий алфавит — 24 заглавные, без финальной сигмы (она только строчная) */
+const GREEK_LETTERS = 'ΑΒΓΔΕΖΗΘΙΚΛΜΝΞΟΠΡΣΤΥΦΧΨΩ'.split('');
+
 function letterAlphabetForUiLang() {
-    return uiLang === 'en' ? LATIN_LETTERS : CYRILLIC_LETTERS;
+    if (uiLang === 'en') return LATIN_LETTERS;
+    if (uiLang === 'el') return GREEK_LETTERS;
+    return CYRILLIC_LETTERS;
 }
 
 const GLYPH_NEON_COLORS = [
@@ -2752,7 +2821,8 @@ function buildCompareRound() {
     /** Буквы и цифры: пара глифов, различие только в символе */
     if (mode === 'compareLetter' || mode === 'compareNumber') {
         const isLetter = mode === 'compareLetter';
-        const pool = isLetter ? CYRILLIC_LETTERS.slice() : Array.from({ length: 10 }, (_, i) => String(i + 1));
+        /** Алфавит текущего языка — озвучка лежит под те же буквы в tasks/<язык>/letters */
+        const pool = isLetter ? letterAlphabetForUiLang().slice() : Array.from({ length: 10 }, (_, i) => String(i + 1));
         const a = pickAvoidingRecent(pool, compareRecentObjects);
         const rest = pool.filter((x) => x !== a);
         const b = rest[Math.floor(Math.random() * rest.length)];
@@ -4959,6 +5029,7 @@ if (import.meta.env?.DEV) {
                 errorFlash: Number((f.errorFlash || 0).toFixed(2)),
                 holdProgress: Number((f.holdProgress || 0).toFixed(2)),
                 countNumber: f.countNumber || 0,
+                glyph: f.glyphChar || null,
                 x: Math.round(f.x),
                 y: Math.round(f.y)
             }))
