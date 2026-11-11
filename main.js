@@ -21,10 +21,19 @@ function loadUiLangPreference() {
 let uiLang = loadUiLangPreference();
 
 /**
- * numPoses у PoseLandmarker. Режим на двоих сейчас не используется —
- * зафиксировано на одном игроке, это заодно разгружает распознавание.
+ * Второй человек — взрослый, который заходит в кадр и показывает ребёнку,
+ * что делать. Его руки работают так же, как руки ребёнка. По умолчанию один:
+ * трекинг двоих заметно тяжелее для слабых устройств.
  */
-let playerModeCount = 1;
+const STORAGE_PLAYER_COUNT = 'yasam-player-count';
+function loadPlayerCountPreference() {
+    try {
+        return localStorage.getItem(STORAGE_PLAYER_COUNT) === '2' ? 2 : 1;
+    } catch {
+        return 1;
+    }
+}
+let playerModeCount = loadPlayerCountPreference();
 
 /** Добавьте ?perf=1 к URL — в консоли раз в ~2.5 с среднее время кадра (поиск фризов на проде) */
 const DEBUG_FRAME_PERF =
@@ -1633,7 +1642,7 @@ const I18N = {
         menuHint: 'Слушай задание и наведи руку на нужный предмет.',
         quickSettingsAria: 'Язык, звук, музыка и число игроков',
         langLabel: 'Язык',
-        playersOnCamera: 'Количество игроков',
+        playersOnCamera: 'Людей в кадре',
         gamesGallery: 'Галерея игр',
         gamesGalleryAria: 'Перейти в галерею игр Blago Games',
         playersOneAria: 'Один игрок',
@@ -1689,7 +1698,7 @@ const I18N = {
         menuHint: 'Listen to the task and hold your hand over the right object.',
         quickSettingsAria: 'Language, sound, music and number of players',
         langLabel: 'Language',
-        playersOnCamera: 'Number of players',
+        playersOnCamera: 'People in frame',
         gamesGallery: 'Game gallery',
         gamesGalleryAria: 'Go to Blago Games gallery',
         playersOneAria: 'One player',
@@ -1743,7 +1752,7 @@ const I18N = {
         menuHint: 'Άκου την οδηγία και κράτα το χέρι σου πάνω στο σωστό αντικείμενο.',
         quickSettingsAria: 'Γλώσσα, ήχος και μουσική',
         langLabel: 'Γλώσσα',
-        playersOnCamera: 'Αριθμός παικτών',
+        playersOnCamera: 'Άτομα στο κάδρο',
         gamesGallery: 'Συλλογή παιχνιδιών',
         gamesGalleryAria: 'Μετάβαση στη συλλογή Blago Games',
         playersOneAria: 'Ένας παίκτης',
@@ -1874,6 +1883,12 @@ function applyUiTranslations() {
     if (hint) hint.textContent = t('menuHint');
     const ml = document.getElementById('menu-lang-label');
     if (ml) ml.textContent = t('langLabel');
+    const mpl = document.getElementById('menu-player-label');
+    if (mpl) mpl.textContent = t('playersOnCamera');
+    const wp1 = document.getElementById('wrap-opt-players-1');
+    const wp2 = document.getElementById('wrap-opt-players-2');
+    if (wp1) wp1.setAttribute('aria-label', t('playersOneAria'));
+    if (wp2) wp2.setAttribute('aria-label', t('playersTwoAria'));
     const mq = document.getElementById('menu-quick-settings');
     if (mq) mq.setAttribute('aria-label', t('quickSettingsAria'));
     const mgl = document.getElementById('menu-games-gallery-label');
@@ -2080,6 +2095,25 @@ mainMenu.addEventListener(
     },
     { capture: true, passive: true }
 );
+
+/** Смена числа игроков пересоздаёт трекер позы — numPoses задаётся только при создании */
+function setPlayerCount(n) {
+    const next = n === 2 ? 2 : 1;
+    if (next === playerModeCount) return;
+    playerModeCount = next;
+    try {
+        localStorage.setItem(STORAGE_PLAYER_COUNT, String(next));
+    } catch {
+        /* приватный режим — выбор просто не запомнится */
+    }
+    void recreatePoseLandmarker();
+}
+for (const r of document.querySelectorAll('input[name="ninja-players"]')) {
+    r.checked = Number(r.value) === playerModeCount;
+    r.addEventListener('change', () => {
+        if (r.checked) setPlayerCount(Number(r.value));
+    });
+}
 
 for (const r of document.querySelectorAll('input[name="ninja-lang"]')) {
     r.addEventListener('change', () => {
@@ -2594,6 +2628,11 @@ function resetCountingState() {
     countHearts = [];
 }
 
+/** Размер счётного предмета: доля экрана с полом и потолком в пикселях */
+function countingBaseRadius(minSide) {
+    return Math.min(75, Math.max(27, minSide * 0.0525));
+}
+
 /** Длительность радостного прыжка сосчитанного котика */
 const COUNT_ANIM_MS = 1100;
 /** После прыжка котик плавно тускнеет — видно, что с ним закончили */
@@ -2677,7 +2716,9 @@ class CountHeart {
 let countHearts = [];
 
 function spawnCountHearts(x, y, radius) {
-    for (let i = 0; i < 7; i++) countHearts.push(new CountHeart(x, y - radius * 0.2, radius * 0.75));
+    /** Сердечки с полом по размеру: от мелкого котика они иначе превращаются в крошки */
+    const size = Math.max(34, radius * 0.75);
+    for (let i = 0; i < 7; i++) countHearts.push(new CountHeart(x, y - radius * 0.2, size));
 }
 
 /**
@@ -3005,7 +3046,7 @@ function startCountingRound() {
     countingDone = 0;
     countingFinishedAt = 0;
 
-    const { spots, radius } = countingLayout(countingTotal, w, h, Math.min(150, Math.max(54, minSide * 0.105)));
+    const { spots, radius } = countingLayout(countingTotal, w, h, countingBaseRadius(minSide));
     /** Если экран не вместил всех, считаем столько, сколько поставили — итог должен совпасть */
     countingTotal = spots.length;
     spots.forEach((p, i) => {
@@ -3406,7 +3447,7 @@ class Fruit {
         this.vy = 0;
         this.gravity = 0;
         /** Радиус задаёт раскладка: на тесном экране она могла его уменьшить */
-        this.radius = spec.radius ?? Math.min(150, Math.max(54, minSide * 0.105));
+        this.radius = spec.radius ?? countingBaseRadius(minSide);
         this.emoji = spec.emoji;
         this.textureRef = getOrCreateEmojiTexture(spec.emoji);
         this.color = '#7CFFB2';
@@ -3519,10 +3560,11 @@ class Fruit {
     drawCountBadge(ctx) {
         if (!this.isCountingObject || this.countNumber <= 0) return;
         const pop = this.countPop;
-        const r = this.radius * 0.42 * (1 + pop * 0.35);
+        /** Номер не мельче пола: котики теперь небольшие, а цифру ребёнок должен прочитать */
+        const r = Math.max(22, this.radius * 0.5) * (1 + pop * 0.35);
         const cx = this.x;
         /** Номер подпрыгивает вместе с котиком */
-        const cy = this.y - this.radius * 0.72 + countJumpPose(this.countAnimMs).dy * this.radius;
+        const cy = this.y - this.radius - r * 0.35 + countJumpPose(this.countAnimMs).dy * this.radius;
 
         ctx.save();
         ctx.translate(cx, cy);
@@ -4217,7 +4259,12 @@ function buildKeyedHandsFromPose(displayPersons) {
     pruneHandInputSmoothState(activeKeys, nowMs);
     const out = [];
     for (let p = 0; p < ordered.length; p++) {
-        const suffix = ordered.length > 1 ? `#${p}` : '';
+        /**
+         * Ключ человека из трекера стабилен между кадрами, а индекс в списке — нет:
+         * поменяйся люди местами, их руки обменялись бы ключами, и «занятая»
+         * рука в счёте внезапно оказалась бы рукой другого человека.
+         */
+        const suffix = `@${ordered[p].key}`;
         /** При интерполяции display уже сглажен между кадрами — лишний EMA на каждом rAF даёт «30 fps» */
         const stableLm = trackTuning.interpolatePose
             ? ordered[p].lm

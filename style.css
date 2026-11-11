@@ -708,6 +708,7 @@ canvas {
     grid-template-columns: 1fr;
     grid-template-areas:
       "lang"
+      "players"
       "audio";
     row-gap: 0.45rem;
     align-items: stretch;
@@ -1167,4 +1168,10 @@ canvas {
 
 .btn-win-next.is-hidden {
   display: none;
+}
+
+/* Иконки «ребёнок» / «ребёнок + взрослый» крупнее текста — читаются с расстояния */
+.menu-quick-settings .menu-players-row .menu-player-segment--compact .menu-player-pill span {
+  font-size: 1.25rem;
+  letter-spacing: 0.15em;
 }
