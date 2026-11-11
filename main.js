@@ -440,31 +440,34 @@ function speakFallback(text) {
  * согласованную с объектом — bigger_circle, bigger_star: и в русском, и в греческом
  * прилагательное меняет род, поэтому склеить «большой» + название нельзя.
  */
+/** Возвращает URL проигранной записи — по нему раунд узнаёт, сколько звучит задание */
 function playTaskSound(taskKey, objectKey, taskKind) {
-    if (!soundEffectsEnabled || !taskKey) return;
+    if (!soundEffectsEnabled || !taskKey) return null;
     if (taskKind === 'letter' || taskKind === 'number') {
         const glyphUrl = taskAudio(taskKind === 'letter' ? 'letters' : 'numbers', taskKey);
         if (glyphUrl) playOneShotSfx(glyphUrl, 1.0);
-        return;
+        return glyphUrl;
     }
     const key = String(taskKey).toLowerCase();
     const url = (objectKey && taskAudio('', `${key}_${String(objectKey).toLowerCase()}`)) || taskAudio('', key);
     if (url) {
         playOneShotSfx(url, 1.0);
-        return;
+        return url;
     }
     /** Нет текстов на этом языке — молчим: русская фраза греческим голосом хуже тишины */
     const fb = TASK_SPEECH_FALLBACK[uiLang];
-    if (!fb) return;
+    if (!fb) return null;
     /** Сначала фраза под конкретный объект, иначе общая — род может не совпасть, но смысл сохранится */
     speakFallback((objectKey && fb[`${key}_${String(objectKey).toLowerCase()}`]) || fb[taskKey]);
+    return null;
 }
 
 /** Озвучка режима счёта: intro_<вид>, count_N, total_<вид>_N */
 function playCountingSound(key) {
-    if (!soundEffectsEnabled || !key) return;
+    if (!soundEffectsEnabled || !key) return null;
     const url = taskAudio('counting', key);
     if (url) playOneShotSfx(url, 1.0);
+    return url;
 }
 
 /** Мягкий сигнал ошибки — не должен пугать ребёнка */
@@ -1270,6 +1273,55 @@ function checkLevelGoal() {
  * а не обнуляется: кратковременная потеря трекинга не должна отнимать результат.
  */
 /** Рука, закреплённая за текущим пересчётом: считать можно только одной */
+/**
+ * Раунд «включается» только после того, как голос договорил задание, и ещё
+ * небольшой паузы. Иначе ребёнок начинает махать руками, не дослушав, и выбирает
+ * наугад. До включения предметы приглушены и не реагируют на руку.
+ */
+/** Пауза после окончания задания, прежде чем предметы оживут */
+const ROUND_ARM_PAUSE_MS = 500;
+/** Если длину записи узнать не удалось (звук выключен, ошибка декодирования) */
+const ROUND_ARM_FALLBACK_MS = 2000;
+/** Потолок ожидания — раунд не должен зависнуть, даже если запись не загрузилась */
+const ROUND_ARM_MAX_MS = 5000;
+/** Длительность «пробуждения» предметов в момент включения */
+const ROUND_ARM_POP_MS = 380;
+
+let roundArmedAt = 0;
+let roundArmToken = 0;
+
+function isRoundArmed() {
+    return performance.now() >= roundArmedAt;
+}
+
+/** Блокирует раунд до начала задания: голос ещё не прозвучал */
+function disarmRound() {
+    roundArmToken += 1;
+    roundArmedAt = Infinity;
+    return roundArmToken;
+}
+
+/**
+ * Включает раунд, когда закончится запись задания. Токен защищает от гонки:
+ * если раунд уже сменился, запоздавший ответ не трогает новый.
+ */
+function armRoundAfterPrompt(token, url) {
+    const arm = (ms) => {
+        if (token === roundArmToken && roundArmedAt === Infinity) {
+            roundArmedAt = performance.now() + ms + ROUND_ARM_PAUSE_MS;
+        }
+    };
+    const ctx = window.__ninjaAudioCtx || getOrCreateSfxContext();
+    if (url && ctx) {
+        ensureSfxAudioBuffer(ctx, url)
+            .then((buf) => arm(buf.duration * 1000))
+            .catch(() => arm(ROUND_ARM_FALLBACK_MS));
+    } else {
+        arm(ROUND_ARM_FALLBACK_MS);
+    }
+    setTimeout(() => arm(0), ROUND_ARM_MAX_MS);
+}
+
 let countingHand = null;
 
 /**
@@ -1282,6 +1334,10 @@ let countingHand = null;
  * или рука ушла с него, обе руки снова свободны — считать может любая.
  */
 function pickHeldFruit(list, tipPoints, mode) {
+    if (!isRoundArmed()) {
+        if (mode === 'counting') countingHand = null;
+        return null;
+    }
     if (!tipPoints.length) {
         if (mode === "counting") countingHand = null;
         return null;
@@ -3053,8 +3109,10 @@ function startCountingRound() {
         fruits.push(new Fruit({ counting: true, id: i + 1, x: p.x, y: p.y, radius, emoji: countingKind.emoji }));
     });
 
-    /** Пауза: сначала ребёнок видит предметы, потом слышит задание */
-    setTimeout(() => playCountingSound(`intro_${countingKind.key}`), 450);
+    /** Сначала ребёнок видит предметы, потом слышит задание; считать можно, когда голос договорит */
+    const token = disarmRound();
+    const introKey = `intro_${countingKind.key}`;
+    setTimeout(() => armRoundAfterPrompt(token, playCountingSound(introKey)), 450);
 }
 
 /** Ставит на экран новую пару и озвучивает задание */
@@ -3082,8 +3140,12 @@ function startCompareRound() {
         fruits.push(new Fruit({ ...spec, slot: slots[idx], color: sameColor ? palette[0] : palette[idx] }));
     });
 
-    /** Небольшая пауза: сначала ребёнок видит пару, потом слышит задание */
-    setTimeout(() => playTaskSound(round.task.taskKey, round.task.shape, round.task.kind), 450);
+    /** Сначала ребёнок видит пару, потом слышит задание; выбирать можно, когда голос договорит */
+    const token = disarmRound();
+    setTimeout(() => {
+        const url = playTaskSound(round.task.taskKey, round.task.shape, round.task.kind);
+        armRoundAfterPrompt(token, url);
+    }, 450);
 }
 
 /** Буквы и цифры: только небольшой наклон и лёгкое качание (без полного оборота и «нечитаемых» углов) */
@@ -3710,6 +3772,19 @@ class Fruit {
                 ctx.shadowColor = '#00f3ff';
                 const blurBase = this.levelMode === 'fruit' ? 18 : 26;
                 ctx.shadowBlur = blurBase + this.hitFlash * 2;
+            }
+            if (this.isCompareObject && !this.celebrating && !(this.countNumber > 0)) {
+                if (!isRoundArmed()) {
+                    /** Ещё звучит задание — предметы видны, но «спят» */
+                    ctx.globalAlpha = 0.5;
+                } else {
+                    /** Раунд ожил: короткий подскок говорит ребёнку «теперь можно» */
+                    const t = (performance.now() - roundArmedAt) / ROUND_ARM_POP_MS;
+                    if (t < 1) {
+                        const k = 1 + 0.14 * Math.sin(Math.PI * t);
+                        ctx.scale(k, k);
+                    }
+                }
             }
             if ((this.isCountingObject && this.countNumber > 0) || this.celebrating) {
                 /** Прыжок с опорой на «пол»: сплющивание идёт от нижнего края, как у мячика */
